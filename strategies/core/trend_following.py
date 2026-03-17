@@ -1,21 +1,20 @@
 """
 Trend Following Strategy — Pullback entry with trend quality filters.
 
-Architecture: 5 hard gates + 1-of-3 pullback + 2-of-4 confluence.
+Architecture: 3 hard gates + 1-of-3 pullback + 1-of-4 confluence.
 Per-pair parameters loaded from thresholds.PAIR_CONFIGS.
 
 Hard gates (ALL must be true):
   1. Supertrend direction (bullish for longs, bearish for shorts)
   2. Close vs EMA(50) + EMA(50) slope confirms direction (no choppy markets)
-  3. Candle confirmation (bullish candle for longs, bearish for shorts)
-  4. RSI band (30-60 for longs, 40-70 for shorts — not overbought/oversold)
+  3. RSI band (30-60 for longs, 40-70 for shorts — not overbought/oversold)
 
 Pullback detection (need >= 1 of 3):
   A. EMA(21) test: low touched EMA(21) within last 3 candles + bounced
   B. RSI dip: RSI dropped below 45 within last 3 candles + recovering
   C. BB middle test: low touched BB middle within last 3 candles + bounced
 
-Confluence (need >= 2 of 4):
+Confluence (need >= 1 of 4):
   A. ADX rising (trend strengthening, catches early trends)
   B. Volume > threshold x SMA(20) (participation)
   C. Close vs EMA(200) (major trend aligned)
@@ -143,7 +142,7 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
     """Add trend following entry signals using pullback + trend quality filters.
 
     Adds columns: tf_enter_long, tf_enter_short, tf_signal_tag.
-    5 hard gates + 1-of-3 pullback detection + 2-of-4 confluence.
+    3 hard gates + 1-of-3 pullback detection + 1-of-4 confluence.
     Regime gate and cooldown are handled externally.
     """
     if df.empty:
@@ -165,11 +164,10 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
     gate_1 = df["supertrend_direction"] == 1                           # Supertrend bullish
     gate_2 = (df["close"] > df["ema_50"]) & \
              (ema50_slope > TF_EMA50_MIN_SLOPE)                        # above EMA50 + trending up
-    gate_3 = df["close"] > df["open"]                                  # bullish candle (momentum)
-    gate_4 = (df["rsi_14"] > cfg["tf_rsi_low"]) & \
+    gate_3 = (df["rsi_14"] > cfg["tf_rsi_low"]) & \
              (df["rsi_14"] < cfg.get("tf_rsi_long_ceil", 60))         # RSI 30-60 (room to run)
 
-    hard_gate_long = gate_1 & gate_2 & gate_3 & gate_4
+    hard_gate_long = gate_1 & gate_2 & gate_3
 
     # Pullback detection (need >= 1 of 3)
     # A: EMA(21) test — low touched EMA21 within lookback + bounced above
@@ -192,7 +190,7 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
 
     has_pullback_long = pullback_a | pullback_b | pullback_c
 
-    # Confluence scoring (need >= 2 of 4)
+    # Confluence scoring (need >= 1 of 4)
     # A: ADX rising — trend is strengthening (catches early trends)
     score_a = (df["tf_adx"] > df["tf_adx"].shift(TF_ADX_RISING_LOOKBACK)).astype(int)
     score_b = (df["volume"] > df["volume_sma_20"] * cfg["tf_volume_mult"]).astype(int)
@@ -201,7 +199,7 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
     score_d = (ema50_slope > TF_EMA50_MIN_SLOPE * 2).astype(int)       # slope > 0.2%
 
     confluence_long = score_a + score_b + score_c + score_d
-    has_confluence_long = confluence_long >= 2
+    has_confluence_long = confluence_long >= 1
 
     long_cond = hard_gate_long & has_pullback_long & has_confluence_long
 
@@ -210,11 +208,10 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
     gate_1s = df["supertrend_direction"] == -1                          # Supertrend bearish
     gate_2s = (df["close"] < df["ema_50"]) & \
               (ema50_slope < -TF_EMA50_MIN_SLOPE)                       # below EMA50 + trending dn
-    gate_3s = df["close"] < df["open"]                                  # bearish candle
-    gate_4s = (df["rsi_14"] > cfg.get("tf_rsi_short_floor", 40)) & \
+    gate_3s = (df["rsi_14"] > cfg.get("tf_rsi_short_floor", 40)) & \
               (df["rsi_14"] < cfg["tf_rsi_high"])                       # RSI 40-70
 
-    hard_gate_short = gate_1s & gate_2s & gate_3s & gate_4s
+    hard_gate_short = gate_1s & gate_2s & gate_3s
 
     # Pullback: price bounced UP to resistance then resumed down
     high_to_ema21 = df["high"] / df["ema_21"]
@@ -236,7 +233,7 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
     score_cs = (df["close"] < df["ema_200"]).astype(int)                # below major trend
     score_ds = (ema50_slope < -TF_EMA50_MIN_SLOPE * 2).astype(int)     # downtrend established
     confluence_short = score_a + score_b + score_cs + score_ds
-    has_confluence_short = confluence_short >= 2
+    has_confluence_short = confluence_short >= 1
 
     short_cond = hard_gate_short & has_pullback_short & has_confluence_short
 

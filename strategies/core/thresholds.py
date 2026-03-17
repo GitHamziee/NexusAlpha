@@ -156,9 +156,9 @@ PAIR_CONFIGS: Dict[str, dict] = {
         "tf_pullback_lookback": 3,          # candles to scan for pullback
         "tf_ema21_pullback_pct": 0.01,      # within 1% of EMA21 = pullback
         # Trend following exit
-        "tf_stop_atr_mult": 3.0,        # was 2.0 — wider to survive noise
-        "tf_tp1_atr_mult": 2.0,         # was 1.5 — give winners more room
-        "tf_tp2_atr_mult": 4.0,         # was 3.0
+        "tf_stop_atr_mult": 4.0,        # was 3.0 — give trades room to breathe
+        "tf_tp1_atr_mult": 3.0,         # was 2.0 — let winners run further
+        "tf_tp2_atr_mult": 6.0,         # was 4.0
         "tf_time_stop": 48,             # was 32 — 12 hours (patient with pullback entries)
         # Mean reversion entry
         "mr_rsi_oversold": 35,
@@ -186,9 +186,9 @@ PAIR_CONFIGS: Dict[str, dict] = {
         "tf_volume_mult": 1.5,
         "tf_pullback_lookback": 3,
         "tf_ema21_pullback_pct": 0.012,     # slightly wider for ETH volatility
-        "tf_stop_atr_mult": 3.0,        # was 2.0
-        "tf_tp1_atr_mult": 2.0,         # was 1.5
-        "tf_tp2_atr_mult": 3.5,         # was 2.5
+        "tf_stop_atr_mult": 4.0,        # was 3.0 — wider for ETH
+        "tf_tp1_atr_mult": 3.0,         # was 2.0
+        "tf_tp2_atr_mult": 5.0,         # was 3.5
         "tf_time_stop": 40,             # was 28 — 10 hours
         "mr_rsi_oversold": 30,
         "mr_rsi_overbought": 70,
@@ -212,9 +212,9 @@ PAIR_CONFIGS: Dict[str, dict] = {
         "tf_volume_mult": 1.8,
         "tf_pullback_lookback": 3,
         "tf_ema21_pullback_pct": 0.015,     # wider for SOL volatility
-        "tf_stop_atr_mult": 3.5,        # was 2.5
-        "tf_tp1_atr_mult": 2.5,         # was 2.0
-        "tf_tp2_atr_mult": 5.0,         # was 3.5
+        "tf_stop_atr_mult": 4.5,        # was 3.5 — widest for volatile SOL
+        "tf_tp1_atr_mult": 3.5,         # was 2.5
+        "tf_tp2_atr_mult": 7.0,         # was 5.0
         "tf_time_stop": 36,             # was 24 — 9 hours
         "mr_rsi_oversold": 25,
         "mr_rsi_overbought": 75,

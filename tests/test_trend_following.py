@@ -1,6 +1,6 @@
 """Tests for trend following strategy — pullback + trend quality filters.
 
-Architecture: 5 hard gates + 1-of-3 pullback + 2-of-4 confluence.
+Architecture: 3 hard gates + 1-of-3 pullback + 1-of-4 confluence.
 """
 
 import numpy as np
@@ -17,7 +17,7 @@ from strategies.core.trend_following import (
 def _golden_path_long(n: int = 6) -> pd.DataFrame:
     """DataFrame where all gates + pullback + confluence met at last row.
 
-    Hard gates: Supertrend bullish, close>EMA50 + slope>0.001, bullish candle, RSI 30-60
+    Hard gates: Supertrend bullish, close>EMA50 + slope>0.001, RSI 30-60
     Pullback: RSI dipped below 45, low near EMA21
     Confluence: ADX rising, volume > 1.5x SMA, close > EMA200, EMA50 slope strong
     """
@@ -120,19 +120,20 @@ class TestPopulateTrendEntries:
         assert df.loc[5, "tf_signal_tag"] == "trend_following"
 
     def test_min_confluence_long(self):
-        """All gates + pullback + exactly 2/4 confluence = signal fires."""
+        """All gates + pullback + exactly 1/4 confluence = signal fires."""
         df = _golden_path_long()
-        # Disable confluence C (EMA200) and D (slope strength)
-        df["ema_200"] = [55000] * 6
+        # Disable confluence A (ADX flat), B (low vol), D (slope weak)
+        df["tf_adx"] = [25, 25, 25, 25, 25, 25]  # flat, not rising
+        df["volume"] = [100] * 6
         df["ema_50_slope"] = [0.0015] * 6   # above 0.001 gate but below 0.002 scoring
-        # Confluence A (ADX rising) + B (vol > 1.5x) = 2 ✓
+        # Only confluence C (close > EMA200) = 1 ✓
         df = populate_trend_entries(df)
         assert df.loc[5, "tf_enter_long"] == 1
 
     def test_insufficient_confluence_blocks(self):
-        """All gates + pullback but only 1/4 confluence = NO signal."""
+        """All gates + pullback but 0/4 confluence = NO signal."""
         df = _golden_path_long()
-        # Disable A (ADX not rising), B (low vol), C (below EMA200)
+        # Disable all 4: A (ADX flat), B (low vol), C (below EMA200), D (slope weak)
         df["tf_adx"] = [25, 25, 25, 25, 25, 25]  # flat, not rising
         df["volume"] = [100] * 6
         df["ema_200"] = [55000] * 6
@@ -161,22 +162,15 @@ class TestPopulateTrendEntries:
         df = populate_trend_entries(df)
         assert df["tf_enter_long"].sum() == 0
 
-    def test_no_signal_when_bearish_candle(self):
-        """Gate 3 fails: bearish candle blocks long."""
-        df = _golden_path_long()
-        df["open"] = [52000] * 6
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
-
     def test_no_signal_when_rsi_overbought(self):
-        """Gate 4 fails: RSI above 60 (long ceiling)."""
+        """Gate 3 fails: RSI above 60 (long ceiling)."""
         df = _golden_path_long()
         df["rsi_14"] = [65, 65, 65, 65, 65, 65]
         df = populate_trend_entries(df)
         assert df["tf_enter_long"].sum() == 0
 
     def test_no_signal_when_rsi_oversold(self):
-        """Gate 4 fails: RSI below 30."""
+        """Gate 3 fails: RSI below 30."""
         df = _golden_path_long()
         df["rsi_14"] = [25, 25, 25, 25, 25, 25]
         df = populate_trend_entries(df)
@@ -239,10 +233,10 @@ class TestPopulateTrendEntries:
         assert df.loc[5, "tf_enter_short"] == 1
         assert df.loc[5, "tf_signal_tag"] == "trend_following"
 
-    def test_short_no_signal_when_bullish_candle(self):
-        """Gate 3 fails for short: bullish candle blocks."""
+    def test_short_no_signal_when_rsi_too_low(self):
+        """Gate 3 fails for short: RSI below 40 (oversold)."""
         df = _golden_path_short()
-        df["open"] = [48000] * 6
+        df["rsi_14"] = [35, 35, 35, 35, 35, 35]
         df = populate_trend_entries(df)
         assert df["tf_enter_short"].sum() == 0
 
