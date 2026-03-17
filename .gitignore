@@ -1,0 +1,41 @@
+# Environment
+.env
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+
+# ML Models (large binary files)
+models/*.joblib
+models/*.pkl
+models/*.cbm
+!models/.gitkeep
+
+# Freqtrade data
+user_data/
+*.sqlite
+
+# Logs
+logs/**/*
+!logs/.gitkeep
+!logs/**/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets
+config/config-live.json

@@ -1,0 +1,78 @@
+{
+    "_comment": "Paper trading config — inherits from config.json, overrides dry_run settings",
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "max_open_trades": 3,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 0.95,
+    "dry_run": true,
+    "dry_run_wallet": 10000,
+    "cancel_open_orders_on_exit": true,
+    "unfilledtimeout": {
+        "entry": 10,
+        "exit": 10,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "exchange": {
+        "name": "binance",
+        "key": "",
+        "secret": "",
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "options": {
+                "defaultType": "future"
+            }
+        },
+        "pair_whitelist": [
+            "BTC/USDT:USDT"
+        ],
+        "pair_blacklist": []
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1
+    },
+    "order_types": {
+        "entry": "limit",
+        "exit": "limit",
+        "stoploss": "market",
+        "stoploss_on_exchange": true
+    },
+    "telegram": {
+        "enabled": true,
+        "token": "",
+        "chat_id": "",
+        "notification_settings": {
+            "status": "on",
+            "warning": "on",
+            "startup": "on",
+            "entry": "on",
+            "exit": "on",
+            "entry_fill": "on",
+            "exit_fill": "on",
+            "protection_trigger": "on"
+        }
+    },
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "0.0.0.0",
+        "listen_port": 8080,
+        "verbosity": "error",
+        "enable_openapi": true,
+        "jwt_secret_key": "nexus_alpha_jwt_change_me",
+        "CORS_origins": ["http://localhost:8081"],
+        "username": "admin",
+        "password": "nexus_alpha_change_me"
+    },
+    "bot_name": "NexusAlpha-PaperTrade",
+    "initial_state": "running",
+    "strategy_path": "/freqtrade/strategies"
+}

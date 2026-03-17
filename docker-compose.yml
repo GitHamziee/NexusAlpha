@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  nexus-alpha:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexus-alpha
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/ping"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+    volumes:
+      - ./strategies:/freqtrade/strategies
+      - ./config:/freqtrade/config
+      - ./models:/freqtrade/models
+      - ./logs:/freqtrade/logs
+      - ./user_data:/freqtrade/user_data
+      - ./scripts:/freqtrade/scripts
+    ports:
+      - "8080:8080"
+    command: >
+      trade
+      --strategy NexusAlpha
+      --strategy-path /freqtrade/strategies
+      --config /freqtrade/config/config.json
+    env_file:
+      - .env
+
+  freqUI:
+    image: freqtradeorg/frequi:stable
+    container_name: nexus-alpha-ui
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    environment:
+      - FREQTRADE_API_URL=http://nexus-alpha:8080
+    depends_on:
+      - nexus-alpha

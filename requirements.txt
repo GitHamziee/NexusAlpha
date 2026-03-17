@@ -1,0 +1,14 @@
+# Indicators
+pandas-ta==0.3.14b1
+
+# Data & API
+requests==2.32.3
+
+# Testing
+pytest==8.3.4
+pytest-cov==6.0.0
+
+# --- PHASE 2 (uncomment after 3+ months live data) ---
+# xgboost==2.1.3
+# scikit-learn==1.5.2
+# optuna==4.1.0
