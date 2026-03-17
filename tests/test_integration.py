@@ -90,43 +90,41 @@ def _run_full_pipeline(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Test 1: TRANSITION regime = zero trades ──────────────────────────────
 
-class TestTransitionSoftGate:
-    def test_transition_signals_can_fire(self):
-        """With soft gating, sub-strategies CAN fire signals in TRANSITION regime.
-        The regime gate is now in confirm_trade_entry (sizing), not in signal generation."""
+class TestTransitionHardGate:
+    def test_transition_regime_has_zero_confidence(self):
+        """TRANSITION regime produces confidence=0.0, which is below the 0.6 hard gate."""
+        # TRANSITION confidence is 0.0 (spec), so risk = 0
+        risk = get_risk_percent(0.0)
+        assert risk == 0.0
+        assert can_trade(0.0, 0, 10000, 10000, 10000) is False
+
+    def test_confidence_below_06_blocks_risk(self):
+        """Risk manager blocks trades when confidence below 0.6 (hard gate)."""
+        risk = get_risk_percent(0.5)
+        assert risk == 0.0
+        assert can_trade(0.5, 0, 10000, 10000, 10000) is False
+
+    def test_confidence_above_06_allows_risk(self):
+        """Confidence >= 0.6 allows trading at half risk."""
+        risk = get_risk_percent(0.65)
+        assert risk > 0.0
+
+    def test_pipeline_no_crash_in_transition(self):
+        """Full pipeline with TRANSITION regime doesn't crash."""
         df = _make_ohlcv(300, noise=100, seed=99)
         df = add_regime_indicators(df)
         df = apply_regime(df)
-
-        # Force all rows to TRANSITION with low confidence
         df["regime"] = TRANSITION
-        df["regime_confidence"] = 0.35
-
+        df["regime_confidence"] = 0.0
         df = add_trend_indicators(df)
         df = add_mr_indicators(df)
         df = add_funding_indicators(df)
         df = populate_trend_entries(df)
         df = populate_mr_entries(df)
         df = populate_funding_entries(df)
-
-        # Signals CAN fire (regime is no longer checked in sub-strategy entries)
-        # We just verify no crash and columns exist
         assert "tf_enter_long" in df.columns
         assert "mr_enter_long" in df.columns
         assert "fr_enter_long" in df.columns
-        # Funding still won't fire (NaN funding data), but TF/MR might
-        assert df["fr_enter_long"].sum() == 0
-
-    def test_very_low_confidence_blocks_risk(self):
-        """Risk manager blocks trades when confidence below 0.25."""
-        risk = get_risk_percent(0.2)
-        assert risk == 0.0
-        assert can_trade(0.2, 0, 10000, 10000, 10000) is False
-
-    def test_transition_confidence_allows_risk(self):
-        """Transition confidence (0.35) is above floor (0.25), allows trading."""
-        risk = get_risk_percent(0.35)
-        assert risk > 0.0
 
 
 # ── Test 2: Full pipeline end-to-end ─────────────────────────────────────
@@ -224,7 +222,7 @@ class TestConfidenceScaling:
         assert size == pytest.approx(2500.0)
 
     def test_low_confidence_zero_size(self):
-        risk = get_risk_percent(0.2)  # below 0.25 floor
+        risk = get_risk_percent(0.5)  # below 0.6 hard gate
         assert risk == 0.0
         size = calculate_position_size(10000, risk, 0.02)
         assert size == 0.0
@@ -273,16 +271,16 @@ class TestMultiTFIntegration:
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.9, VOLATILE, 0.3)
         assert regime == VOLATILE
         assert conf == 0.3
-        # VOLATILE with conf 0.3 >= 0.25 → allowed but at quarter risk
+        # VOLATILE with conf 0.3 < 0.6 → blocked by hard gate
         risk = get_risk_percent(conf)
-        assert risk == pytest.approx(0.0025)  # quarter risk
+        assert risk == 0.0
 
     def test_disagreement_reduces_confidence(self):
-        """15m trending + 1H ranging → confidence reduced by 15%."""
+        """15m trending + 1H ranging → confidence reduced by 50%."""
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.7, RANGING, 0.6)
-        assert conf == pytest.approx(0.595)  # 0.7 * 0.85
+        assert conf == pytest.approx(0.35)  # 0.7 * 0.50
         risk = get_risk_percent(conf)
-        assert risk == pytest.approx(0.0025)  # 0.25 <= 0.595 < 0.6 → quarter risk
+        assert risk == 0.0  # 0.35 < 0.6 hard gate → no trade
 
     def test_agreement_preserves_confidence(self):
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.8, TRENDING_BULL, 0.7)

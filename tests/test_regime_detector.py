@@ -106,7 +106,7 @@ class TestClassifyRegime:
         assert regime == VOLATILE
 
     def test_transition(self):
-        """ADX between range and trend thresholds → TRANSITION (soft gate, conf=0.35)."""
+        """ADX between range and trend thresholds → TRANSITION (hard gate, conf=0.0)."""
         # baseline=22, range_thresh = 18, trend_thresh = 28
         regime, conf = classify_regime(
             adx=23, plus_di=18, minus_di=17,
@@ -115,7 +115,7 @@ class TestClassifyRegime:
             adx_baseline=22,
         )
         assert regime == TRANSITION
-        assert conf == pytest.approx(0.35)
+        assert conf == pytest.approx(0.0)
 
     def test_nan_returns_transition(self):
         """Any NaN input should safely return TRANSITION with zero conf."""
@@ -149,7 +149,7 @@ class TestClassifyRegime:
             adx_baseline=30,
         )
         assert regime == TRANSITION
-        assert conf == pytest.approx(0.35)
+        assert conf == pytest.approx(0.0)
 
     def test_adaptive_threshold_low_baseline(self):
         """When ADX baseline is low, trend threshold drops to floor."""
@@ -190,7 +190,7 @@ class TestMultiTFConfirmation:
     def test_disagreement_reduces_confidence(self):
         r, c = confirm_regime_multitf(TRENDING_BULL, 0.8, RANGING, 0.6)
         assert r == TRENDING_BULL
-        assert c == pytest.approx(0.68)  # 0.8 * 0.85
+        assert c == pytest.approx(0.4)  # 0.8 * 0.50
 
     def test_1h_volatile_overrides(self):
         """1H VOLATILE overrides regardless of 15m."""
@@ -199,9 +199,9 @@ class TestMultiTFConfirmation:
         assert c == 0.3
 
     def test_transition_on_15m(self):
-        r, c = confirm_regime_multitf(TRANSITION, 0.35, RANGING, 0.6)
+        r, c = confirm_regime_multitf(TRANSITION, 0.0, RANGING, 0.6)
         assert r == TRANSITION
-        assert c == pytest.approx(0.35 * 0.85)  # disagreement penalty
+        assert c == pytest.approx(0.0)  # TRANSITION conf=0.0, penalty irrelevant
 
 
 # ── full pipeline tests (add_regime_indicators → apply_regime) ───────────

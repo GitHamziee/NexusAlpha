@@ -1,14 +1,16 @@
 """
-Mean Reversion Strategy — 3 independent paths for mean reversion entries.
+Mean Reversion Strategy — 9-AND confluence for high-selectivity entries.
 
-Uses OR-of-simple-groups pattern: any ONE signal path can trigger an entry.
-Each path has only 2-3 conditions (vs. the old 9-condition AND approach).
+ALL conditions must be simultaneously true for an entry signal.
+Conditions 1-2 (regime=RANGING, MTF) and 9 (cooldown) are handled externally.
+This module implements conditions 3-8:
 
-Path A — BB Bounce: close at/below lower BB + RSI oversold
-Path B — MACD Reversal: close near lower BB + MACD turning + bullish candle
-Path C — RSI Bounce: deep RSI oversold + bullish candle + volume
-
-Regime is a soft gate (affects sizing in NexusAlpha.py, not signal blocking).
+  3. Close <= BB Lower x 1.001 (at or below lower band)
+  4. RSI(14) < 32 (oversold)
+  5. MACD histogram turning positive (hist > hist[1] AND hist[1] < 0)
+  6. Volume > Volume SMA(20) x 1.1 (above-average volume on bounce)
+  7. Bullish candle (close > open)
+  8. Close > EMA(200) OR EMA(200) slope is flat
 """
 
 from __future__ import annotations
@@ -23,17 +25,18 @@ from .thresholds import (
     ATR_PERIOD,
     BB_PERIOD,
     BB_STD,
+    MR_BB_TOUCH_LONG_MULT,
+    MR_BB_TOUCH_SHORT_MULT,
     MR_EMA_SLOW as EMA_SLOW,
+    MR_EMA200_FLAT_SLOPE,
     MR_MACD_FAST as MACD_FAST,
     MR_MACD_SIGNAL as MACD_SIGNAL,
     MR_MACD_SLOW as MACD_SLOW,
-    MR_PATH_A_RSI as PATH_A_RSI,
-    MR_PATH_B_BB_PROXIMITY as PATH_B_BB_PROXIMITY,
-    MR_PATH_B_RSI_FILTER as PATH_B_RSI_FILTER,
-    MR_PATH_C_RSI as PATH_C_RSI,
-    MR_PATH_C_VOLUME_MULT as PATH_C_VOLUME_MULT,
+    MR_RSI_OVERBOUGHT,
+    MR_RSI_OVERSOLD,
     MR_STOP_ATR_MULT as STOP_ATR_MULT,
     MR_TIME_STOP_CANDLES as TIME_STOP_CANDLES,
+    MR_VOLUME_MULT,
     RSI_PERIOD,
     VOLUME_SMA_PERIOD,
 )
@@ -87,11 +90,11 @@ def add_mr_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
-    """Add mean reversion entry signals using 3 OR'd signal paths.
+    """Add mean reversion entry signals using 9-AND confluence.
 
     Adds columns: mr_enter_long, mr_enter_short, mr_signal_tag.
-    Any ONE path firing is sufficient for an entry signal.
-    Regime is NOT checked here — it's a soft gate handled in NexusAlpha.py.
+    ALL conditions (3-8) must be true simultaneously.
+    Conditions 1-2 (regime=RANGING, MTF) and 9 (cooldown) are handled externally.
     """
     if df.empty:
         df["mr_enter_long"] = pd.Series(dtype=int)
@@ -99,54 +102,66 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
         df["mr_signal_tag"] = pd.Series(dtype=str)
         return df
 
-    hist = df["mr_macd_hist"]
-    hist_turning_up = hist > hist.shift(1)
-    hist_turning_down = hist < hist.shift(1)
-    bullish_candle = df["close"] > df["open"]
-    bearish_candle = df["close"] < df["open"]
-    vol_ok = df["volume"] > df["mr_volume_sma"] * PATH_C_VOLUME_MULT
+    # ── LONG CONDITIONS (all must be true) ─────────────────────────────
 
-    # ── PATH A — BB Bounce (classic mean reversion) ─────────────────
-    # Price at/below lower BB + RSI oversold
-    path_a_long = (
-        (df["close"] <= df["mr_bb_lower"]) &
-        (df["mr_rsi"] < PATH_A_RSI)
-    )
-    path_a_short = (
-        (df["close"] >= df["mr_bb_upper"]) &
-        (df["mr_rsi"] > (100 - PATH_A_RSI))
+    # Condition 3: Close at or below lower BB
+    cond_3_long = df["close"] <= df["mr_bb_lower"] * MR_BB_TOUCH_LONG_MULT
+
+    # Condition 4: RSI oversold
+    cond_4_long = df["mr_rsi"] < MR_RSI_OVERSOLD
+
+    # Condition 5: MACD histogram turning positive (was negative, now rising)
+    cond_5_long = (
+        (df["mr_macd_hist"] > df["mr_macd_hist"].shift(1)) &
+        (df["mr_macd_hist"].shift(1) < 0)
     )
 
-    # ── PATH B — MACD Reversal — DISABLED ────────────────────────────
-    # Backtesting showed this path fires ~900 times in 273 days on BTC 15m
-    # with negative expectancy. The MACD histogram oscillates too frequently
-    # near BB on 15m timeframe, producing noise not signal.
-    path_b_long = pd.Series(False, index=df.index)
-    path_b_short = pd.Series(False, index=df.index)
+    # Condition 6: Volume above average
+    cond_6_long = df["volume"] > df["mr_volume_sma"] * MR_VOLUME_MULT
 
-    # ── PATH C — RSI Bounce — DISABLED ──────────────────────────────
-    # Backtesting showed 26 trades in 2 months with 11.5% win rate on BTC 15m.
-    # RSI < 30 without BB proximity catches falling knives in declining markets.
-    # All profitable MR trades come from Path A (BB Bounce) which requires
-    # price at the BB band, providing a structural support level.
-    path_c_long = pd.Series(False, index=df.index)
-    path_c_short = pd.Series(False, index=df.index)
+    # Condition 7: Bullish candle (momentum shifting)
+    cond_7_long = df["close"] > df["open"]
 
-    # ── COMBINE with OR ─────────────────────────────────────────────
-    long_cond = path_a_long | path_b_long | path_c_long
-    short_cond = path_a_short | path_b_short | path_c_short
+    # Condition 8: Above EMA(200) OR EMA(200) slope is flat
+    ema_flat = df["mr_ema_200_slope"].abs() < MR_EMA200_FLAT_SLOPE
+    cond_8_long = (df["close"] > df["mr_ema_200"]) | ema_flat
 
+    # 9-AND: ALL must be true
+    long_cond = cond_3_long & cond_4_long & cond_5_long & cond_6_long & cond_7_long & cond_8_long
+
+    # ── SHORT CONDITIONS (mirror) ──────────────────────────────────────
+
+    # Condition 3: Close at or above upper BB
+    cond_3_short = df["close"] >= df["mr_bb_upper"] * MR_BB_TOUCH_SHORT_MULT
+
+    # Condition 4: RSI overbought
+    cond_4_short = df["mr_rsi"] > MR_RSI_OVERBOUGHT
+
+    # Condition 5: MACD histogram turning negative (was positive, now falling)
+    cond_5_short = (
+        (df["mr_macd_hist"] < df["mr_macd_hist"].shift(1)) &
+        (df["mr_macd_hist"].shift(1) > 0)
+    )
+
+    # Condition 6: Volume above average
+    cond_6_short = cond_6_long  # same for both sides
+
+    # Condition 7: Bearish candle
+    cond_7_short = df["close"] < df["open"]
+
+    # Condition 8: Below EMA(200) OR EMA(200) slope is flat
+    cond_8_short = (df["close"] < df["mr_ema_200"]) | ema_flat
+
+    # 9-AND: ALL must be true
+    short_cond = cond_3_short & cond_4_short & cond_5_short & cond_6_short & cond_7_short & cond_8_short
+
+    # ── OUTPUT ─────────────────────────────────────────────────────────
     df["mr_enter_long"] = long_cond.astype(int).fillna(0).astype(int)
     df["mr_enter_short"] = short_cond.astype(int).fillna(0).astype(int)
 
-    # Signal tag for enter_tag routing (priority: A > B > C)
     df["mr_signal_tag"] = ""
-    df.loc[path_c_long.fillna(False), "mr_signal_tag"] = "mr_rsi_bounce"
-    df.loc[path_b_long.fillna(False), "mr_signal_tag"] = "mr_macd_reversal"
-    df.loc[path_a_long.fillna(False), "mr_signal_tag"] = "mr_bb_bounce"
-    df.loc[path_c_short.fillna(False), "mr_signal_tag"] = "mr_rsi_bounce"
-    df.loc[path_b_short.fillna(False), "mr_signal_tag"] = "mr_macd_reversal"
-    df.loc[path_a_short.fillna(False), "mr_signal_tag"] = "mr_bb_bounce"
+    df.loc[long_cond.fillna(False), "mr_signal_tag"] = "mean_reversion"
+    df.loc[short_cond.fillna(False), "mr_signal_tag"] = "mean_reversion"
 
     return df
 

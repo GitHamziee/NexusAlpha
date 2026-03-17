@@ -11,7 +11,7 @@ Non-negotiable rules (from spec Section VIII):
 - 3% daily drawdown → stop trading today
 - 15% total drawdown → full system review
 - 4-candle cooldown after every loss
-- Confidence-scaled sizing: >=0.8 → 1%, 0.6-0.8 → 0.5%, 0.25-0.6 → 0.25%, <0.25 → NO TRADE
+- Confidence-scaled sizing: >=0.8 → 1%, 0.6-0.8 → 0.5%, <0.6 → NO TRADE
 
 Dynamic ATR stop scaling: when ATR > 1.5x its 100-period SMA, widen stops
 proportionally and shrink position so dollar risk stays constant.
@@ -60,7 +60,7 @@ def get_risk_percent(regime_confidence: float, is_funding: bool = False) -> floa
     """Return per-trade risk as a decimal based on regime confidence.
 
     Funding rate trades are always half-size regardless of confidence.
-    Confidence < CONFIRM_MIN_CONFIDENCE (0.25) → 0.0 (no trade allowed).
+    Confidence < CONFIRM_MIN_CONFIDENCE (0.6) → 0.0 (no trade allowed).
     """
     if regime_confidence < CONFIRM_MIN_CONFIDENCE:
         return 0.0

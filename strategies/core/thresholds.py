@@ -58,21 +58,21 @@ STOCHRSI_RSI_PERIOD = 14
 STOCHRSI_STOCH_PERIOD = 3
 STOCHRSI_SMOOTH = 3
 
-# Entry thresholds
-TF_ADX_ENTRY_THRESH = 22          # minimum ADX for trend entry
+# Entry thresholds (9-AND conditions 3-8)
+TF_ADX_ENTRY_THRESH = 28          # ADX > 28 AND rising (spec Section V)
 TF_STOCHRSI_OVERSOLD = 45         # StochRSI oversold zone (wider for 15m BTC)
 TF_STOCHRSI_OVERBOUGHT = 55       # StochRSI overbought zone
 TF_STOCHRSI_LOOKBACK = 5          # candles to look back for recent oversold/overbought
-TF_RSI_OB_GUARD = 78              # block long if RSI above this
-TF_RSI_OS_GUARD = 22              # block short if RSI below this
-TF_VOLUME_MULT = 1.0              # minimum volume ratio for entry
+TF_RSI_OB_GUARD = 75              # block long if RSI above this (spec: 75)
+TF_RSI_OS_GUARD = 25              # block short if RSI below this (spec: 25)
+TF_VOLUME_MULT = 1.0              # minimum volume ratio for entry (spec: 1.0)
 
 # Exit thresholds
-TF_STOP_ATR_MULT = 3.0            # ATR multiplier for stop loss (widened from 2.0)
+TF_STOP_ATR_MULT = 2.0            # ATR multiplier for stop loss (spec: 2.0x)
 TF_TP1_ATR_MULT = 1.5             # first take profit
 TF_TP2_ATR_MULT = 3.0             # second take profit
 TF_ADX_DEATH_LEVEL = 18           # ADX death → exit trend
-TF_TIME_STOP_CANDLES = 40         # 10 hours on 15m (relaxed from 20)
+TF_TIME_STOP_CANDLES = 20         # 5 hours on 15m (spec: 20 candles)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MEAN REVERSION
@@ -86,16 +86,17 @@ MR_MACD_SIGNAL = 9
 # EMA
 MR_EMA_SLOW = 200
 
-# Entry thresholds
-MR_BB_TOUCH_LONG_MULT = 1.01      # close <= bb_lower * this (within 1% of lower BB)
-MR_BB_TOUCH_SHORT_MULT = 0.99     # close >= bb_upper * this (within 1% of upper BB)
-MR_RSI_OVERSOLD = 42              # RSI oversold for long entry
-MR_RSI_OVERBOUGHT = 58            # RSI overbought for short entry
-MR_VOLUME_MULT = 0.9              # volume multiplier for entry
+# Entry thresholds (9-AND conditions 3-8)
+MR_BB_TOUCH_LONG_MULT = 1.001     # close <= bb_lower * this (spec: 1.001)
+MR_BB_TOUCH_SHORT_MULT = 0.999    # close >= bb_upper * this (spec: 0.999)
+MR_RSI_OVERSOLD = 32              # RSI oversold for long entry (spec: 32)
+MR_RSI_OVERBOUGHT = 68            # RSI overbought for short entry (spec: 68)
+MR_VOLUME_MULT = 1.1              # volume multiplier for entry (spec: 1.1)
+MR_EMA200_FLAT_SLOPE = 0.001      # EMA200 slope < this = "flat" (allows MR below EMA200)
 
 # Exit thresholds
-MR_STOP_ATR_MULT = 3.5            # ATR multiplier for stop loss (widened from 2.5)
-MR_TIME_STOP_CANDLES = 24         # 6 hours on 15m (relaxed from 12)
+MR_STOP_ATR_MULT = 1.5            # ATR multiplier for stop loss (spec: 1.5x)
+MR_TIME_STOP_CANDLES = 12         # 3 hours on 15m (spec: 12 candles)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FUNDING RATE
@@ -133,40 +134,9 @@ RISK_ATR_SPIKE_THRESHOLD = 1.5    # ATR > 1.5x SMA → widen stops
 MAX_BALANCE_FRACTION = 0.33        # max 33% of balance per trade
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TREND FOLLOWING — OR SIGNAL PATHS
+# REGIME HARD GATE
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Path A: Supertrend Breakout
-TF_PATH_A_VOLUME_MULT = 0.8          # volume > sma * this (loosened from 1.0)
-
-# Path B: EMA Momentum
-TF_PATH_B_ADX_THRESH = 25            # ADX > this for momentum confirmation
-TF_PATH_B_RSI_LOW = 40               # RSI floor (avoid oversold fakeouts)
-TF_PATH_B_RSI_HIGH = 70              # RSI ceiling (avoid overbought entries)
-
-# Path C: BB Breakout
-TF_PATH_C_ADX_LOOKBACK = 3           # ADX must be higher than N candles ago
-TF_PATH_C_VOLUME_SPIKE = 1.3         # volume > sma * this for breakout (loosened from 1.5)
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MEAN REVERSION — OR SIGNAL PATHS
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Path A: BB Bounce
-MR_PATH_A_RSI = 28                    # RSI < this for long, > (100-this) for short (tightened from 35)
-
-# Path B: MACD Reversal
-MR_PATH_B_BB_PROXIMITY = 0.01        # close within 1% of BB lower/upper (tightened from 2%)
-MR_PATH_B_RSI_FILTER = 45            # RSI must be < this for long, > (100-this) for short
-
-# Path C: RSI Bounce
-MR_PATH_C_RSI = 30                    # deep RSI oversold for long
-MR_PATH_C_VOLUME_MULT = 1.0          # volume > sma * this
-
-# ═══════════════════════════════════════════════════════════════════════════
-# REGIME SOFT GATE
-# ═══════════════════════════════════════════════════════════════════════════
-
-REGIME_TRANSITION_CONFIDENCE = 0.35   # was 0.0 — no longer blocks all trades
-REGIME_MTF_PENALTY = 0.85            # was 0.75 — softer disagreement penalty
-CONFIRM_MIN_CONFIDENCE = 0.25         # minimum confidence to allow any trade
+REGIME_TRANSITION_CONFIDENCE = 0.0  # TRANSITION regime = no trades (spec)
+REGIME_MTF_PENALTY = 0.50          # 50% penalty when 1H disagrees (spec)
+CONFIRM_MIN_CONFIDENCE = 0.6       # minimum confidence to allow any trade (spec)

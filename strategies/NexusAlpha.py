@@ -103,11 +103,10 @@ TRADE_COLUMNS = [
 
 class NexusAlpha(IStrategy):
     """
-    Regime-adaptive strategy using 3 sub-strategies with OR-of-simple-groups.
+    Regime-adaptive strategy using 9-AND confluence filtering.
 
-    Each sub-strategy has 3 independent signal paths (2-3 conditions each).
-    Any ONE path firing triggers an entry. Regime is a soft gate that
-    affects position sizing, not signal blocking.
+    Each sub-strategy requires ALL conditions to be simultaneously true.
+    Regime is a hard gate: confidence < 0.6 = NO TRADE.
     """
 
     # ─── Freqtrade Configuration ───────────────────────────────────────
@@ -214,31 +213,28 @@ class NexusAlpha(IStrategy):
         dataframe.loc[:, "enter_short"] = 0
         dataframe.loc[:, "enter_tag"] = ""
 
-        # Strategy entry signals (no regime hard-gate — soft gate in confirm_trade_entry)
+        # Strategy entry signals (regime hard-gate in confirm_trade_entry)
         dataframe = populate_trend_entries(dataframe)
         dataframe = populate_mr_entries(dataframe)
         dataframe = populate_funding_entries(dataframe)
 
         # Merge signals — priority: TF > MR > FR
-        # Each sub-strategy provides a signal_tag column with the specific path name
 
         # Trend Following
         long_tf = dataframe["tf_enter_long"] == 1
         short_tf = dataframe["tf_enter_short"] == 1
         dataframe.loc[long_tf, "enter_long"] = 1
-        dataframe.loc[long_tf, "enter_tag"] = dataframe.loc[long_tf, "tf_signal_tag"] + "_long"
+        dataframe.loc[long_tf, "enter_tag"] = "trend_following_long"
         dataframe.loc[short_tf, "enter_short"] = 1
-        dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "enter_tag"] = (
-            dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "tf_signal_tag"] + "_short"
-        )
+        dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "enter_tag"] = "trend_following_short"
 
         # Mean Reversion (only if no TF signal on same candle)
         long_mr = (dataframe["mr_enter_long"] == 1) & (dataframe["enter_long"] == 0)
         short_mr = (dataframe["mr_enter_short"] == 1) & (dataframe["enter_short"] == 0)
         dataframe.loc[long_mr, "enter_long"] = 1
-        dataframe.loc[long_mr, "enter_tag"] = dataframe.loc[long_mr, "mr_signal_tag"] + "_long"
+        dataframe.loc[long_mr, "enter_tag"] = "mean_reversion_long"
         dataframe.loc[short_mr, "enter_short"] = 1
-        dataframe.loc[short_mr, "enter_tag"] = dataframe.loc[short_mr, "mr_signal_tag"] + "_short"
+        dataframe.loc[short_mr, "enter_tag"] = "mean_reversion_short"
 
         # Funding Rate (lowest priority)
         long_fr = (dataframe["fr_enter_long"] == 1) & (dataframe["enter_long"] == 0)
@@ -292,13 +288,13 @@ class NexusAlpha(IStrategy):
 
     def _get_base_stop_mult(self, tag: str) -> float:
         """Return base ATR stop multiplier for a given signal tag."""
-        if "tf_" in tag or "trend_following" in tag:
-            return 2.5 if "bb_breakout" in tag else TF_STOP_ATR_MULT
-        elif "mr_" in tag or "mean_reversion" in tag:
-            return 4.0 if "rsi_bounce" in tag else MR_STOP_ATR_MULT
+        if "trend_following" in tag:
+            return TF_STOP_ATR_MULT    # 2.0
+        elif "mean_reversion" in tag:
+            return MR_STOP_ATR_MULT    # 1.5
         elif "funding_rate" in tag:
-            return FR_STOP_ATR_MULT
-        return 2.5
+            return FR_STOP_ATR_MULT    # 3.0
+        return 2.0
 
     # ─── custom_stoploss ───────────────────────────────────────────────
 
@@ -349,8 +345,8 @@ class NexusAlpha(IStrategy):
 
         # ── Time stop: force close if trade has stalled ──────────────
         trade_candles = (current_time - trade.open_date).total_seconds() / 900
-        is_tf = "tf_" in tag or "trend_following" in tag
-        is_mr = "mr_" in tag or "mean_reversion" in tag
+        is_tf = "trend_following" in tag
+        is_mr = "mean_reversion" in tag
         if is_tf and trade_candles > TF_TIME_STOP and current_profit < 0.005:
             return -0.001
         if is_mr and trade_candles > MR_TIME_STOP and current_profit < 0.005:
@@ -360,8 +356,8 @@ class NexusAlpha(IStrategy):
         stop_distance = scaled_mult * atr
         stop_pct = -(stop_distance / entry_rate)
 
-        # Clamp: never tighter than -1.5%, never wider than -5%
-        return max(min(stop_pct, -0.015), -0.05)
+        # Clamp: never wider than -5%
+        return max(stop_pct, -0.05)
 
     # ─── confirm_trade_entry ───────────────────────────────────────────
 
@@ -392,9 +388,9 @@ class NexusAlpha(IStrategy):
         is_funding = "funding_rate" in tag
 
         # Determine signal type for regime-aware sizing
-        if "tf_" in tag or "trend_following" in tag:
+        if "trend_following" in tag:
             signal_type = "tf"
-        elif "mr_" in tag or "mean_reversion" in tag:
+        elif "mean_reversion" in tag:
             signal_type = "mr"
         else:
             signal_type = "fr"
@@ -491,9 +487,9 @@ class NexusAlpha(IStrategy):
         is_funding = "funding_rate" in tag
 
         # Determine signal type for regime-aware sizing
-        if "tf_" in tag or "trend_following" in tag:
+        if "trend_following" in tag:
             signal_type = "tf"
-        elif "mr_" in tag or "mean_reversion" in tag:
+        elif "mean_reversion" in tag:
             signal_type = "mr"
         else:
             signal_type = "fr"
