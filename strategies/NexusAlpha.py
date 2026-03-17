@@ -14,9 +14,15 @@ ML enhancement planned for Phase 2 after 3+ months of live data.
 import csv
 import logging
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Add strategies dir to path so freqtrade can resolve sub-package imports
+_STRATEGY_DIR = str(Path(__file__).resolve().parent)
+if _STRATEGY_DIR not in sys.path:
+    sys.path.insert(0, _STRATEGY_DIR)
 
 import pandas as pd
 from freqtrade.persistence import Trade
@@ -27,32 +33,32 @@ from freqtrade.strategy import (
     merge_informative_pair,
 )
 
-from .core.funding_rate import (
+from core.funding_rate import (
     STOP_ATR_MULT as FR_STOP_ATR_MULT,
     add_funding_indicators,
     populate_funding_entries,
     populate_funding_exits,
 )
-from .core.mean_reversion import (
+from core.mean_reversion import (
     STOP_ATR_MULT as MR_STOP_ATR_MULT,
     TIME_STOP_CANDLES as MR_TIME_STOP,
     add_mr_indicators,
     populate_mr_entries,
     populate_mr_exits,
 )
-from .core.regime_detector import (
+from core.regime_detector import (
     add_regime_indicators,
     apply_multitf_confirmation,
     apply_regime,
 )
-from .core.trend_following import (
+from core.trend_following import (
     STOP_ATR_MULT as TF_STOP_ATR_MULT,
     TIME_STOP_CANDLES as TF_TIME_STOP,
     add_trend_indicators,
     populate_trend_entries,
     populate_trend_exits,
 )
-from .risk.risk_manager import (
+from risk.risk_manager import (
     calculate_position_size,
     get_risk_percent,
     scale_atr_stop,
