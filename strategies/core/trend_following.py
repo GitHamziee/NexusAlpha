@@ -27,6 +27,7 @@ from .thresholds import (
     SUPERTREND_PERIOD,
     TF_ADX_ENTRY_THRESH as ADX_ENTRY_THRESH,
     TF_ADX_DEATH_LEVEL as ADX_DEATH_LEVEL,
+    TF_STOCHRSI_LOOKBACK as STOCHRSI_LOOKBACK,
     TF_EMA_FAST as EMA_FAST,
     TF_EMA_MID as EMA_MID,
     TF_EMA_SLOW as EMA_SLOW,
@@ -120,9 +121,12 @@ def populate_trend_entries(df: pd.DataFrame) -> pd.DataFrame:
     # StochRSI pullback conditions — "recently in oversold/overbought zone"
     k = df["stochrsi_k"]
     d = df["stochrsi_d"]
-    # Was oversold within last 3 candles and now crossing up
-    was_oversold = (k.shift(1) < STOCHRSI_OVERSOLD) | (k.shift(2) < STOCHRSI_OVERSOLD) | (k.shift(3) < STOCHRSI_OVERSOLD)
-    was_overbought = (k.shift(1) > STOCHRSI_OVERBOUGHT) | (k.shift(2) > STOCHRSI_OVERBOUGHT) | (k.shift(3) > STOCHRSI_OVERBOUGHT)
+    # Was oversold/overbought within last N candles
+    was_oversold = pd.Series(False, index=df.index)
+    was_overbought = pd.Series(False, index=df.index)
+    for i in range(1, STOCHRSI_LOOKBACK + 1):
+        was_oversold = was_oversold | (k.shift(i) < STOCHRSI_OVERSOLD)
+        was_overbought = was_overbought | (k.shift(i) > STOCHRSI_OVERBOUGHT)
     k_cross_up = (k > d) & was_oversold
     k_cross_down = (k < d) & was_overbought
 

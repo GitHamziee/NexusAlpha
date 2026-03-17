@@ -94,8 +94,9 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     hist = df["mr_macd_hist"]
-    hist_turning_up = (hist > hist.shift(1)) & (hist.shift(1) < 0)
-    hist_turning_down = (hist < hist.shift(1)) & (hist.shift(1) > 0)
+    # MACD momentum improving (histogram moving in the right direction)
+    hist_turning_up = hist > hist.shift(1)
+    hist_turning_down = hist < hist.shift(1)
 
     bullish_candle = df["close"] > df["open"]
     bearish_candle = df["close"] < df["open"]

@@ -60,8 +60,9 @@ STOCHRSI_SMOOTH = 3
 
 # Entry thresholds
 TF_ADX_ENTRY_THRESH = 22          # minimum ADX for trend entry
-TF_STOCHRSI_OVERSOLD = 35         # StochRSI oversold zone
-TF_STOCHRSI_OVERBOUGHT = 65       # StochRSI overbought zone
+TF_STOCHRSI_OVERSOLD = 45         # StochRSI oversold zone (wider for 15m BTC)
+TF_STOCHRSI_OVERBOUGHT = 55       # StochRSI overbought zone
+TF_STOCHRSI_LOOKBACK = 5          # candles to look back for recent oversold/overbought
 TF_RSI_OB_GUARD = 78              # block long if RSI above this
 TF_RSI_OS_GUARD = 22              # block short if RSI below this
 TF_VOLUME_MULT = 1.0              # minimum volume ratio for entry
@@ -86,10 +87,10 @@ MR_MACD_SIGNAL = 9
 MR_EMA_SLOW = 200
 
 # Entry thresholds
-MR_BB_TOUCH_LONG_MULT = 1.005     # close <= bb_lower * this
-MR_BB_TOUCH_SHORT_MULT = 0.995    # close >= bb_upper * this
-MR_RSI_OVERSOLD = 38              # RSI oversold for long entry
-MR_RSI_OVERBOUGHT = 62            # RSI overbought for short entry
+MR_BB_TOUCH_LONG_MULT = 1.01      # close <= bb_lower * this (within 1% of lower BB)
+MR_BB_TOUCH_SHORT_MULT = 0.99     # close >= bb_upper * this (within 1% of upper BB)
+MR_RSI_OVERSOLD = 42              # RSI oversold for long entry
+MR_RSI_OVERBOUGHT = 58            # RSI overbought for short entry
 MR_VOLUME_MULT = 0.9              # volume multiplier for entry
 
 # Exit thresholds
