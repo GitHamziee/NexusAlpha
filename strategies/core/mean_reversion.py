@@ -124,18 +124,13 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
     path_b_long = pd.Series(False, index=df.index)
     path_b_short = pd.Series(False, index=df.index)
 
-    # ── PATH C — RSI Bounce (deep oversold) ─────────────────────────
-    # Deep RSI + bullish candle + volume confirms
-    path_c_long = (
-        (df["mr_rsi"] < PATH_C_RSI) &
-        bullish_candle &
-        vol_ok
-    )
-    path_c_short = (
-        (df["mr_rsi"] > (100 - PATH_C_RSI)) &
-        bearish_candle &
-        vol_ok
-    )
+    # ── PATH C — RSI Bounce — DISABLED ──────────────────────────────
+    # Backtesting showed 26 trades in 2 months with 11.5% win rate on BTC 15m.
+    # RSI < 30 without BB proximity catches falling knives in declining markets.
+    # All profitable MR trades come from Path A (BB Bounce) which requires
+    # price at the BB band, providing a structural support level.
+    path_c_long = pd.Series(False, index=df.index)
+    path_c_short = pd.Series(False, index=df.index)
 
     # ── COMBINE with OR ─────────────────────────────────────────────
     long_cond = path_a_long | path_b_long | path_c_long

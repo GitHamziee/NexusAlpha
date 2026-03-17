@@ -4,7 +4,7 @@ Trend Following Strategy — catches established trends via 3 independent paths.
 Uses OR-of-simple-groups pattern: any ONE signal path can trigger an entry.
 Each path has only 2-3 conditions (vs. the old 9-condition AND approach).
 
-Path A — Supertrend Breakout: ST flips bullish + close > EMA50 + volume
+Path A — Supertrend Breakout: ST flips bullish + close > EMA9 + volume
 Path B — EMA Momentum: EMA9 > EMA50 + ADX strong + RSI in range
 Path C — BB Breakout: close > BB upper + ADX rising + volume spike
 
@@ -142,12 +142,12 @@ def populate_trend_entries(df: pd.DataFrame) -> pd.DataFrame:
     vol_spike = df["volume"] > df["volume_sma_20"] * PATH_C_VOLUME_SPIKE
 
     # ── PATH A — Supertrend Breakout (trend initiation) ─────────────
-    # Supertrend just flipped bullish + above EMA50 + volume confirms
+    # Supertrend just flipped bullish + above EMA9 (short-term momentum) + volume
     st_flip_up = (df["supertrend_direction"] == 1) & (df["supertrend_direction"].shift(1) == -1)
     st_flip_down = (df["supertrend_direction"] == -1) & (df["supertrend_direction"].shift(1) == 1)
 
-    path_a_long = st_flip_up & (df["close"] > df["ema_50"]) & vol_ok
-    path_a_short = st_flip_down & (df["close"] < df["ema_50"]) & vol_ok
+    path_a_long = st_flip_up & (df["close"] > df["ema_9"]) & vol_ok
+    path_a_short = st_flip_down & (df["close"] < df["ema_9"]) & vol_ok
 
     # ── PATH B — EMA Momentum (trend continuation) ──────────────────
     # EMA9 CROSSES above EMA50 + ADX strong + RSI in healthy range
@@ -172,12 +172,12 @@ def populate_trend_entries(df: pd.DataFrame) -> pd.DataFrame:
     path_c_long = (
         (df["close"] > df["bb_upper"]) &
         adx_rising &
-        vol_spike
+        vol_ok
     )
     path_c_short = (
         (df["close"] < df["bb_lower"]) &
         adx_rising &
-        vol_spike
+        vol_ok
     )
 
     # ── COMBINE with OR ─────────────────────────────────────────────

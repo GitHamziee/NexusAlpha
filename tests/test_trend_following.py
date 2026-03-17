@@ -52,7 +52,7 @@ class TestAddTrendIndicators:
 
 class TestPopulateTrendEntries:
     def test_path_a_supertrend_breakout_long(self):
-        """Path A: Supertrend flip up + close > EMA50 + volume."""
+        """Path A: Supertrend flip up + close > EMA9 + volume."""
         n = 5
         df = pd.DataFrame({
             "supertrend_direction": [-1, -1, -1, -1, 1],  # flips at idx 4
@@ -71,7 +71,7 @@ class TestPopulateTrendEntries:
         assert df.loc[4, "tf_signal_tag"] == "tf_supertrend"
 
     def test_path_a_supertrend_breakout_short(self):
-        """Path A short: Supertrend flip down + close < EMA50 + volume."""
+        """Path A short: Supertrend flip down + close < EMA9 + volume."""
         n = 5
         df = pd.DataFrame({
             "supertrend_direction": [1, 1, 1, 1, -1],  # flips at idx 4
@@ -145,7 +145,7 @@ class TestPopulateTrendEntries:
         assert df["tf_enter_long"].sum() == 0
 
     def test_path_c_bb_breakout_long(self):
-        """Path C: Close > BB upper + ADX rising + volume spike."""
+        """Path C: Close > BB upper + ADX rising + volume."""
         n = 5
         df = pd.DataFrame({
             "supertrend_direction": [1, 1, 1, 1, 1],
@@ -157,7 +157,7 @@ class TestPopulateTrendEntries:
             "bb_lower": [48000] * n,
             "rsi_14": [75, 75, 75, 75, 75],  # outside Path B range (40-70)
             "volume": [300, 300, 300, 300, 800],
-            "volume_sma_20": [400] * n,  # 800 > 400*1.5=600 → vol spike
+            "volume_sma_20": [400] * n,  # 800 > 400*0.8=320 → vol ok
         })
         df = populate_trend_entries(df)
         assert df.loc[4, "tf_enter_long"] == 1

@@ -96,23 +96,23 @@ class TestPopulateMREntries:
         path_b_fired = (df["mr_signal_tag"] == "mr_macd_reversal").any()
         assert not path_b_fired
 
-    def test_path_c_rsi_bounce_long(self):
-        """Path C: RSI < 30 + bullish candle + volume > SMA."""
+    def test_path_c_disabled(self):
+        """Path C (RSI Bounce) is disabled — should never fire."""
         n = 3
         df = pd.DataFrame({
             "close": [50500, 50500, 50600],   # idx 2 is bullish
             "open": [50600, 50600, 50400],     # close > open at idx 2
-            "mr_bb_lower": [49000] * n,        # close not near BB lower (Path A/B won't fire)
+            "mr_bb_lower": [49000] * n,        # close not near BB lower (Path A won't fire)
             "mr_bb_upper": [51000] * n,
             "mr_bb_middle": [50000] * n,
             "mr_rsi": [35, 28, 25],            # < 30 at idx 1,2
-            "mr_macd_hist": [-50, -50, -50],   # not turning up (Path B blocked)
+            "mr_macd_hist": [-50, -50, -50],
             "volume": [300, 300, 600],
-            "mr_volume_sma": [400] * n,        # 600 > 400 * 1.0 = 400 at idx 2
+            "mr_volume_sma": [400] * n,
         })
         df = populate_mr_entries(df)
-        assert df.loc[2, "mr_enter_long"] == 1
-        assert df.loc[2, "mr_signal_tag"] == "mr_rsi_bounce"
+        path_c_fired = (df["mr_signal_tag"] == "mr_rsi_bounce").any()
+        assert not path_c_fired
 
     def test_or_logic_any_path_fires(self):
         """Any single path firing should produce a long signal."""
