@@ -16,27 +16,24 @@ from typing import Optional
 import pandas as pd
 import pandas_ta as ta
 
+from .thresholds import (
+    ATR_PERIOD,
+    FR_FUNDING_LONG_THRESH as FUNDING_LONG_THRESH,
+    FR_FUNDING_NORMAL_HIGH as FUNDING_NORMAL_HIGH,
+    FR_FUNDING_NORMAL_LOW as FUNDING_NORMAL_LOW,
+    FR_FUNDING_SHORT_THRESH as FUNDING_SHORT_THRESH,
+    FR_LS_RATIO_LONG_THRESH as LS_RATIO_LONG_THRESH,
+    FR_LS_RATIO_SHORT_THRESH as LS_RATIO_SHORT_THRESH,
+    FR_MAX_HOLD_CANDLES as MAX_HOLD_CANDLES,
+    FR_MIN_HOLD_CANDLES as MIN_HOLD_CANDLES,
+    FR_RSI_OVERBOUGHT as RSI_OVERBOUGHT,
+    FR_RSI_OVERSOLD as RSI_OVERSOLD,
+    FR_STOP_ATR_MULT as STOP_ATR_MULT,
+    RSI_PERIOD,
+    VOLUME_SMA_PERIOD,
+)
+
 logger = logging.getLogger(__name__)
-
-# ── indicator parameters ─────────────────────────────────────────────────
-RSI_PERIOD = 14
-ATR_PERIOD = 14
-VOLUME_SMA_PERIOD = 20
-
-# ── entry thresholds (EXTREME — by design) ───────────────────────────────
-FUNDING_LONG_THRESH = -0.0005    # funding < -0.05% (short crowding)
-FUNDING_SHORT_THRESH = 0.0008    # funding > 0.08% (long crowding)
-LS_RATIO_LONG_THRESH = 0.7       # crowd very short
-LS_RATIO_SHORT_THRESH = 1.8      # crowd very long
-RSI_OVERSOLD = 35
-RSI_OVERBOUGHT = 65
-
-# ── exit parameters ──────────────────────────────────────────────────────
-STOP_ATR_MULT = 3.0              # wider stops for funding trades
-FUNDING_NORMAL_LOW = -0.0001     # funding normalized range
-FUNDING_NORMAL_HIGH = 0.0001
-MIN_HOLD_CANDLES = 32            # 1 funding period = 8 hours = 32 × 15m
-MAX_HOLD_CANDLES = 192           # 48 hours
 
 
 def add_funding_indicators(df: pd.DataFrame) -> pd.DataFrame:

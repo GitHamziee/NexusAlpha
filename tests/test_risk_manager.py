@@ -26,8 +26,9 @@ class TestGetRiskPercent:
     def test_medium_confidence(self):
         assert get_risk_percent(0.7) == MAX_RISK_PER_TRADE / 2  # 0.5%
 
-    def test_low_confidence_blocks(self):
-        assert get_risk_percent(0.5) == 0.0
+    def test_low_confidence_quarter_risk(self):
+        """0.5 <= confidence < 0.6 → quarter risk (0.25%)."""
+        assert get_risk_percent(0.5) == MAX_RISK_PER_TRADE / 4
 
     def test_edge_0_6(self):
         """Exactly 0.6 should allow trading at half risk."""
@@ -42,8 +43,9 @@ class TestGetRiskPercent:
         assert get_risk_percent(0.9, is_funding=True) == FUNDING_RISK_PER_TRADE
         assert get_risk_percent(0.7, is_funding=True) == FUNDING_RISK_PER_TRADE
 
-    def test_funding_still_blocked_below_0_6(self):
-        assert get_risk_percent(0.5, is_funding=True) == 0.0
+    def test_funding_allowed_at_0_5(self):
+        """Funding trades allowed at 0.5 confidence (above new 0.5 threshold)."""
+        assert get_risk_percent(0.5, is_funding=True) == FUNDING_RISK_PER_TRADE
 
 
 # ── calculate_position_size ──────────────────────────────────────────────
@@ -152,8 +154,9 @@ class TestCanTrade:
     def test_all_ok(self):
         assert can_trade(**self._defaults()) is True
 
-    def test_low_confidence_blocks(self):
-        assert can_trade(**self._defaults(regime_confidence=0.5)) is False
+    def test_low_confidence_allowed(self):
+        """0.5 confidence now allowed with quarter risk."""
+        assert can_trade(**self._defaults(regime_confidence=0.5)) is True
 
     def test_max_trades_blocks(self):
         assert can_trade(**self._defaults(open_trade_count=3)) is False

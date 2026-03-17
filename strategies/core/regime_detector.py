@@ -19,6 +19,25 @@ from typing import Tuple
 import pandas as pd
 import pandas_ta as ta
 
+from .thresholds import (
+    ADX_BASELINE_PERIOD,
+    ADX_PERIOD,
+    ADX_RANGE_CEIL,
+    ADX_RANGE_FLOOR,
+    ADX_RANGE_OFFSET,
+    ADX_TREND_CEIL,
+    ADX_TREND_FLOOR,
+    ADX_TREND_OFFSET,
+    ATR_PERIOD,
+    ATR_SPIKE_MULT,
+    BB_PERIOD,
+    BB_SPIKE_MULT,
+    BB_STD,
+    EMA_SLOPE_LOOKBACK,
+    EMA_SLOPE_PERIOD,
+    VOLATILITY_SMA_PERIOD,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── Regime labels ────────────────────────────────────────────────────────
@@ -27,32 +46,6 @@ TRENDING_BEAR = "TRENDING_BEAR"
 RANGING = "RANGING"
 VOLATILE = "VOLATILE"
 TRANSITION = "TRANSITION"
-
-# ── Adaptive threshold offsets from ADX baseline ─────────────────────────
-# ADX baseline = SMA(ADX, 100).  Range ceiling = baseline - 4,
-# trend floor = baseline + 6.  Gap between them is the TRANSITION zone.
-ADX_BASELINE_PERIOD = 100
-ADX_RANGE_OFFSET = -4      # below baseline → ranging
-ADX_TREND_OFFSET = 6       # above baseline → trending
-
-# Hard floors/ceilings so thresholds stay sensible
-ADX_RANGE_FLOOR = 12
-ADX_RANGE_CEIL = 22
-ADX_TREND_FLOOR = 22
-ADX_TREND_CEIL = 35
-
-# ── Volatility spike multipliers ─────────────────────────────────────────
-ATR_SPIKE_MULT = 2.0       # ATR > 2x its SMA → volatile
-BB_SPIKE_MULT = 2.5        # BB width > 2.5x its SMA → volatile
-
-# ── Indicator periods ────────────────────────────────────────────────────
-ADX_PERIOD = 14
-BB_PERIOD = 20
-BB_STD = 2.0
-EMA_SLOPE_PERIOD = 50
-EMA_SLOPE_LOOKBACK = 10    # rate-of-change window for EMA slope
-ATR_PERIOD = 14
-VOLATILITY_SMA_PERIOD = 100
 
 
 def add_regime_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -214,8 +207,8 @@ def confirm_regime_multitf(
     if regime_15m == regime_1h:
         return regime_15m, conf_15m
 
-    # Disagreement → halve confidence (likely drops below 0.6 threshold)
-    adjusted = conf_15m * 0.5
+    # Disagreement → reduce confidence by 25% (keeps more signals viable)
+    adjusted = conf_15m * 0.75
     return regime_15m, adjusted
 
 

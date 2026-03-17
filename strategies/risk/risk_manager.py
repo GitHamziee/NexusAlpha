@@ -22,29 +22,45 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+try:
+    from core.thresholds import (  # noqa: F401  (Docker / freqtrade)
+        COOLDOWN_CANDLES,
+        FUNDING_RISK_PER_TRADE,
+        MAX_BALANCE_FRACTION,
+        MAX_DAILY_DRAWDOWN,
+        MAX_LEVERAGE,
+        MAX_OPEN_TRADES,
+        MAX_RISK_PER_TRADE,
+        MAX_TOTAL_DRAWDOWN,
+        PAIR_LOCKOUT_CANDLES,
+        PAIR_LOCKOUT_LOSSES,
+        RISK_ATR_SPIKE_THRESHOLD as ATR_SPIKE_THRESHOLD,
+    )
+except ModuleNotFoundError:
+    from strategies.core.thresholds import (  # noqa: F401  (pytest)
+        COOLDOWN_CANDLES,
+        FUNDING_RISK_PER_TRADE,
+        MAX_BALANCE_FRACTION,
+        MAX_DAILY_DRAWDOWN,
+        MAX_LEVERAGE,
+        MAX_OPEN_TRADES,
+        MAX_RISK_PER_TRADE,
+        MAX_TOTAL_DRAWDOWN,
+        PAIR_LOCKOUT_CANDLES,
+        PAIR_LOCKOUT_LOSSES,
+        RISK_ATR_SPIKE_THRESHOLD as ATR_SPIKE_THRESHOLD,
+    )
 
-# ── constants ────────────────────────────────────────────────────────────
-MAX_RISK_PER_TRADE = 0.01       # 1 % of account
-FUNDING_RISK_PER_TRADE = 0.005  # 0.5 % for funding rate trades
-MAX_OPEN_TRADES = 3
-MAX_LEVERAGE = 3.0
-MAX_DAILY_DRAWDOWN = 0.03       # 3 %
-MAX_TOTAL_DRAWDOWN = 0.15       # 15 %
-COOLDOWN_CANDLES = 4
-PAIR_LOCKOUT_LOSSES = 3
-PAIR_LOCKOUT_CANDLES = 16
-ATR_SPIKE_THRESHOLD = 1.5       # ATR > 1.5x SMA triggers dynamic scaling
-MAX_BALANCE_FRACTION = 0.33     # never risk more than 33% balance in one trade
+logger = logging.getLogger(__name__)
 
 
 def get_risk_percent(regime_confidence: float, is_funding: bool = False) -> float:
     """Return per-trade risk as a decimal based on regime confidence.
 
     Funding rate trades are always half-size regardless of confidence.
-    Confidence < 0.6 → 0.0 (no trade allowed).
+    Confidence < 0.5 → 0.0 (no trade allowed).
     """
-    if regime_confidence < 0.6:
+    if regime_confidence < 0.5:
         return 0.0
 
     if is_funding:
@@ -52,8 +68,10 @@ def get_risk_percent(regime_confidence: float, is_funding: bool = False) -> floa
 
     if regime_confidence >= 0.8:
         return MAX_RISK_PER_TRADE  # 1.0%
-    # 0.6 <= confidence < 0.8
-    return MAX_RISK_PER_TRADE / 2  # 0.5%
+    if regime_confidence >= 0.6:
+        return MAX_RISK_PER_TRADE / 2  # 0.5%
+    # 0.5 <= confidence < 0.6
+    return MAX_RISK_PER_TRADE / 4  # 0.25%
 
 
 def calculate_position_size(

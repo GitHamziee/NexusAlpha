@@ -204,22 +204,6 @@ class NexusAlpha(IStrategy):
         # ATR SMA for dynamic stop scaling
         dataframe["atr_14_sma"] = dataframe["atr_14"].rolling(window=100, min_periods=20).mean()
 
-        # ── DEBUG: diagnose 0-trade issue ──────────────────────────────
-        n = len(dataframe)
-        logger.warning("=== DIAGNOSTIC: %d rows ===", n)
-        for col in ["adx_14", "atr_14", "bb_width", "ema_50", "rsi_14",
-                     "supertrend_direction", "stochrsi_k", "tf_adx"]:
-            if col in dataframe.columns:
-                nan_pct = dataframe[col].isna().sum() / n * 100 if n else 0
-                logger.warning("  %s: NaN=%.1f%%, mean=%.4f",
-                               col, nan_pct, dataframe[col].mean() if not dataframe[col].isna().all() else 0)
-        if "regime" in dataframe.columns:
-            logger.warning("  Regime distribution:\n%s", dataframe["regime"].value_counts().to_string())
-        if "regime_confidence" in dataframe.columns:
-            logger.warning("  Confidence >= 0.6: %d / %d",
-                           (dataframe["regime_confidence"] >= 0.6).sum(), n)
-        # ── END DEBUG ──────────────────────────────────────────────────
-
         return dataframe
 
     # ─── populate_entry_trend ──────────────────────────────────────────
@@ -260,18 +244,6 @@ class NexusAlpha(IStrategy):
         dataframe.loc[long_fr, "enter_tag"] = "funding_rate_long"
         dataframe.loc[short_fr, "enter_short"] = 1
         dataframe.loc[short_fr, "enter_tag"] = "funding_rate_short"
-
-        # ── DEBUG: signal counts ───────────────────────────────────────
-        logger.warning("=== SIGNAL COUNTS ===")
-        logger.warning("  tf_enter_long=%d, tf_enter_short=%d",
-                       dataframe["tf_enter_long"].sum(), dataframe["tf_enter_short"].sum())
-        logger.warning("  mr_enter_long=%d, mr_enter_short=%d",
-                       dataframe["mr_enter_long"].sum(), dataframe["mr_enter_short"].sum())
-        logger.warning("  fr_enter_long=%d, fr_enter_short=%d",
-                       dataframe["fr_enter_long"].sum(), dataframe["fr_enter_short"].sum())
-        logger.warning("  FINAL enter_long=%d, enter_short=%d",
-                       dataframe["enter_long"].sum(), dataframe["enter_short"].sum())
-        # ── END DEBUG ──────────────────────────────────────────────────
 
         return dataframe
 

@@ -16,29 +16,26 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
+from .thresholds import (
+    ATR_PERIOD,
+    BB_PERIOD,
+    BB_STD,
+    MR_BB_TOUCH_LONG_MULT as BB_TOUCH_LONG_MULT,
+    MR_BB_TOUCH_SHORT_MULT as BB_TOUCH_SHORT_MULT,
+    MR_EMA_SLOW as EMA_SLOW,
+    MR_MACD_FAST as MACD_FAST,
+    MR_MACD_SIGNAL as MACD_SIGNAL,
+    MR_MACD_SLOW as MACD_SLOW,
+    MR_RSI_OVERBOUGHT as RSI_OVERBOUGHT,
+    MR_RSI_OVERSOLD as RSI_OVERSOLD,
+    MR_STOP_ATR_MULT as STOP_ATR_MULT,
+    MR_TIME_STOP_CANDLES as TIME_STOP_CANDLES,
+    MR_VOLUME_MULT as VOLUME_MULT,
+    RSI_PERIOD,
+    VOLUME_SMA_PERIOD,
+)
+
 logger = logging.getLogger(__name__)
-
-# ── indicator parameters ─────────────────────────────────────────────────
-BB_PERIOD = 20
-BB_STD = 2.0
-RSI_PERIOD = 14
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
-VOLUME_SMA_PERIOD = 20
-ATR_PERIOD = 14
-EMA_SLOW = 200
-
-# ── entry thresholds ─────────────────────────────────────────────────────
-BB_TOUCH_LONG_MULT = 1.001   # close <= bb_lower * 1.001
-BB_TOUCH_SHORT_MULT = 0.999  # close >= bb_upper * 0.999
-RSI_OVERSOLD = 32
-RSI_OVERBOUGHT = 68
-VOLUME_MULT = 1.1            # above-average volume on the bounce
-
-# ── exit parameters ──────────────────────────────────────────────────────
-STOP_ATR_MULT = 1.5
-TIME_STOP_CANDLES = 12  # 3 hours on 15m
 
 
 def add_mr_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -109,8 +106,8 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
     # ── LONG — 9 conditions ──────────────────────────────────────────
     long_cond = (
         (df["regime"] == "RANGING") &                          # L1
-        (df["regime_confidence"] >= 0.6) &                     # L1
-        (df["close"] <= df["mr_bb_lower"] * BB_TOUCH_LONG_MULT) &  # L3: at/below lower BB
+        (df["regime_confidence"] >= 0.5) &                     # L1
+        (df["close"] <= df["mr_bb_lower"] * BB_TOUCH_LONG_MULT) &  # L3: near lower BB
         (df["mr_rsi"] < RSI_OVERSOLD) &                        # L3: oversold
         hist_turning_up &                                      # L3: MACD turning
         (df["volume"] > df["mr_volume_sma"] * VOLUME_MULT) &  # L4: volume
@@ -122,7 +119,7 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
     # ── SHORT — 9 conditions (mirror) ────────────────────────────────
     short_cond = (
         (df["regime"] == "RANGING") &
-        (df["regime_confidence"] >= 0.6) &
+        (df["regime_confidence"] >= 0.5) &
         (df["close"] >= df["mr_bb_upper"] * BB_TOUCH_SHORT_MULT) &
         (df["mr_rsi"] > RSI_OVERBOUGHT) &
         hist_turning_down &
