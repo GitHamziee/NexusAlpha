@@ -29,6 +29,9 @@
         ],
         "pair_blacklist": []
     },
+    "pairlists": [
+        {"method": "StaticPairList"}
+    ],
     "entry_pricing": {
         "price_side": "other",
         "use_order_book": true,
@@ -88,5 +91,7 @@
         "process_throttle_secs": 5,
         "heartbeat_interval": 60
     },
-    "strategy_path": "/freqtrade/strategies"
+    "strategy_path": "/freqtrade/strategies",
+    "dataformat_ohlcv": "feather",
+    "dataformat_trades": "feather"
 }

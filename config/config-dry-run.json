@@ -30,6 +30,9 @@
         ],
         "pair_blacklist": []
     },
+    "pairlists": [
+        {"method": "StaticPairList"}
+    ],
     "entry_pricing": {
         "price_side": "other",
         "use_order_book": true,
@@ -74,5 +77,7 @@
     },
     "bot_name": "NexusAlpha-PaperTrade",
     "initial_state": "running",
-    "strategy_path": "/freqtrade/strategies"
+    "strategy_path": "/freqtrade/strategies",
+    "dataformat_ohlcv": "feather",
+    "dataformat_trades": "feather"
 }
