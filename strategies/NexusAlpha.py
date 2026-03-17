@@ -58,7 +58,7 @@ from core.trend_following import (
     populate_trend_entries,
     populate_trend_exits,
 )
-from core.thresholds import CONFIRM_MIN_CONFIDENCE
+from core.thresholds import CONFIRM_MIN_CONFIDENCE, TF_TP1_ATR_MULT, TF_TP2_ATR_MULT
 from risk.risk_manager import (
     calculate_position_size,
     get_regime_adjusted_risk,
@@ -288,6 +288,18 @@ class NexusAlpha(IStrategy):
 
         return dataframe
 
+    # ─── stop multiplier helper ─────────────────────────────────────────
+
+    def _get_base_stop_mult(self, tag: str) -> float:
+        """Return base ATR stop multiplier for a given signal tag."""
+        if "tf_" in tag or "trend_following" in tag:
+            return 2.5 if "bb_breakout" in tag else TF_STOP_ATR_MULT
+        elif "mr_" in tag or "mean_reversion" in tag:
+            return 4.0 if "rsi_bounce" in tag else MR_STOP_ATR_MULT
+        elif "funding_rate" in tag:
+            return FR_STOP_ATR_MULT
+        return 2.5
+
     # ─── custom_stoploss ───────────────────────────────────────────────
 
     def custom_stoploss(
@@ -300,7 +312,7 @@ class NexusAlpha(IStrategy):
         after_fill: bool,
         **kwargs,
     ) -> float:
-        """ATR-based stop per strategy + dynamic ATR scaling in high vol."""
+        """ATR-based stop + TP-based trailing + dynamic ATR scaling."""
 
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if dataframe.empty:
@@ -317,38 +329,38 @@ class NexusAlpha(IStrategy):
         tag = trade.enter_tag or ""
 
         # Base multiplier per signal path
-        if "tf_" in tag or "trend_following" in tag:
-            if "bb_breakout" in tag:
-                base_mult = 1.5  # tighter for breakouts (should follow through)
-            else:
-                base_mult = TF_STOP_ATR_MULT  # 2.0
-        elif "mr_" in tag or "mean_reversion" in tag:
-            if "rsi_bounce" in tag:
-                base_mult = 3.0  # wider for deep reversals
-            else:
-                base_mult = MR_STOP_ATR_MULT  # 2.5
-        elif "funding_rate" in tag:
-            base_mult = FR_STOP_ATR_MULT  # 3.0
-        else:
-            base_mult = 2.0
+        base_mult = self._get_base_stop_mult(tag)
 
         # Dynamic scaling: widen stop when vol spikes
         scaled_mult = scale_atr_stop(base_mult, atr, atr_sma)
 
-        stop_distance = scaled_mult * atr
-        stop_pct = -(stop_distance / entry_rate)
+        # ── TP-based trailing ────────────────────────────────────────
+        tp1_pct = TF_TP1_ATR_MULT * atr / entry_rate
+        tp2_pct = TF_TP2_ATR_MULT * atr / entry_rate
 
-        # Time stop: if trade has been open too long without profit
-        trade_candles = (current_time - trade.open_date).total_seconds() / 900  # 15m candles
+        if current_profit >= tp2_pct:
+            # Lock in 80% of TP1-level gains
+            locked = tp1_pct * 0.8
+            return ((1 + locked) / (1 + current_profit)) - 1
+
+        if current_profit >= tp1_pct:
+            # Move stop to breakeven
+            return (1.001 / (1 + current_profit)) - 1
+
+        # ── Time stop: force close if trade has stalled ──────────────
+        trade_candles = (current_time - trade.open_date).total_seconds() / 900
         is_tf = "tf_" in tag or "trend_following" in tag
         is_mr = "mr_" in tag or "mean_reversion" in tag
         if is_tf and trade_candles > TF_TIME_STOP and current_profit < 0.005:
-            return -0.001  # force close
+            return -0.001
         if is_mr and trade_candles > MR_TIME_STOP and current_profit < 0.005:
             return -0.001
 
-        # Clamp: never tighter than -1.5% (avoids same-candle stop-outs on 15m)
-        # and never wider than -5%
+        # ── Normal ATR-based stop ────────────────────────────────────
+        stop_distance = scaled_mult * atr
+        stop_pct = -(stop_distance / entry_rate)
+
+        # Clamp: never tighter than -1.5%, never wider than -5%
         return max(min(stop_pct, -0.015), -0.05)
 
     # ─── confirm_trade_entry ───────────────────────────────────────────
@@ -494,20 +506,7 @@ class NexusAlpha(IStrategy):
         atr = last.get("atr_14", 0)
         atr_sma = last.get("atr_14_sma", atr)
 
-        if "tf_" in tag or "trend_following" in tag:
-            if "bb_breakout" in tag:
-                base_mult = 1.5
-            else:
-                base_mult = TF_STOP_ATR_MULT
-        elif "mr_" in tag or "mean_reversion" in tag:
-            if "rsi_bounce" in tag:
-                base_mult = 3.0
-            else:
-                base_mult = MR_STOP_ATR_MULT
-        elif "funding_rate" in tag:
-            base_mult = FR_STOP_ATR_MULT
-        else:
-            base_mult = 2.0
+        base_mult = self._get_base_stop_mult(tag)
 
         scaled_mult = scale_atr_stop(base_mult, atr, atr_sma)
         stop_distance = scaled_mult * atr

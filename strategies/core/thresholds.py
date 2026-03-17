@@ -68,11 +68,11 @@ TF_RSI_OS_GUARD = 22              # block short if RSI below this
 TF_VOLUME_MULT = 1.0              # minimum volume ratio for entry
 
 # Exit thresholds
-TF_STOP_ATR_MULT = 2.0            # ATR multiplier for stop loss
+TF_STOP_ATR_MULT = 3.0            # ATR multiplier for stop loss (widened from 2.0)
 TF_TP1_ATR_MULT = 1.5             # first take profit
 TF_TP2_ATR_MULT = 3.0             # second take profit
 TF_ADX_DEATH_LEVEL = 18           # ADX death → exit trend
-TF_TIME_STOP_CANDLES = 20         # 5 hours on 15m
+TF_TIME_STOP_CANDLES = 40         # 10 hours on 15m (relaxed from 20)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MEAN REVERSION
@@ -94,8 +94,8 @@ MR_RSI_OVERBOUGHT = 58            # RSI overbought for short entry
 MR_VOLUME_MULT = 0.9              # volume multiplier for entry
 
 # Exit thresholds
-MR_STOP_ATR_MULT = 2.5            # ATR multiplier for stop loss
-MR_TIME_STOP_CANDLES = 12         # 3 hours on 15m
+MR_STOP_ATR_MULT = 3.5            # ATR multiplier for stop loss (widened from 2.5)
+MR_TIME_STOP_CANDLES = 24         # 6 hours on 15m (relaxed from 12)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FUNDING RATE
@@ -137,7 +137,7 @@ MAX_BALANCE_FRACTION = 0.33        # max 33% of balance per trade
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Path A: Supertrend Breakout
-TF_PATH_A_VOLUME_MULT = 1.0          # volume > sma * this
+TF_PATH_A_VOLUME_MULT = 0.8          # volume > sma * this (loosened from 1.0)
 
 # Path B: EMA Momentum
 TF_PATH_B_ADX_THRESH = 25            # ADX > this for momentum confirmation
@@ -146,7 +146,7 @@ TF_PATH_B_RSI_HIGH = 70              # RSI ceiling (avoid overbought entries)
 
 # Path C: BB Breakout
 TF_PATH_C_ADX_LOOKBACK = 3           # ADX must be higher than N candles ago
-TF_PATH_C_VOLUME_SPIKE = 1.5         # volume > sma * this for breakout
+TF_PATH_C_VOLUME_SPIKE = 1.3         # volume > sma * this for breakout (loosened from 1.5)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MEAN REVERSION — OR SIGNAL PATHS
@@ -156,7 +156,8 @@ TF_PATH_C_VOLUME_SPIKE = 1.5         # volume > sma * this for breakout
 MR_PATH_A_RSI = 35                    # RSI < this for long, > (100-this) for short
 
 # Path B: MACD Reversal
-MR_PATH_B_BB_PROXIMITY = 0.02        # close within 2% of BB lower/upper
+MR_PATH_B_BB_PROXIMITY = 0.01        # close within 1% of BB lower/upper (tightened from 2%)
+MR_PATH_B_RSI_FILTER = 45            # RSI must be < this for long, > (100-this) for short
 
 # Path C: RSI Bounce
 MR_PATH_C_RSI = 30                    # deep RSI oversold for long

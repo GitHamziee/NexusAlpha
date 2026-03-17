@@ -29,6 +29,7 @@ from .thresholds import (
     MR_MACD_SLOW as MACD_SLOW,
     MR_PATH_A_RSI as PATH_A_RSI,
     MR_PATH_B_BB_PROXIMITY as PATH_B_BB_PROXIMITY,
+    MR_PATH_B_RSI_FILTER as PATH_B_RSI_FILTER,
     MR_PATH_C_RSI as PATH_C_RSI,
     MR_PATH_C_VOLUME_MULT as PATH_C_VOLUME_MULT,
     MR_STOP_ATR_MULT as STOP_ATR_MULT,
@@ -117,15 +118,23 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # ── PATH B — MACD Reversal (momentum shift near BB) ─────────────
-    # Close within 2% of BB + MACD histogram turning + bullish candle
+    # Close within 1% of BB + MACD negative & turning + RSI filter + bullish candle
+    hist_negative = df["mr_macd_hist"] < 0
+    hist_positive = df["mr_macd_hist"] > 0
+    rsi_oversold_filter = df["mr_rsi"] < PATH_B_RSI_FILTER
+    rsi_overbought_filter = df["mr_rsi"] > (100 - PATH_B_RSI_FILTER)
     path_b_long = (
         (df["close"] <= df["mr_bb_lower"] * (1 + PATH_B_BB_PROXIMITY)) &
+        hist_negative &
         hist_turning_up &
+        rsi_oversold_filter &
         bullish_candle
     )
     path_b_short = (
         (df["close"] >= df["mr_bb_upper"] * (1 - PATH_B_BB_PROXIMITY)) &
+        hist_positive &
         hist_turning_down &
+        rsi_overbought_filter &
         bearish_candle
     )
 

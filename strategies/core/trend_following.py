@@ -150,15 +150,18 @@ def populate_trend_entries(df: pd.DataFrame) -> pd.DataFrame:
     path_a_short = st_flip_down & (df["close"] < df["ema_50"]) & vol_ok
 
     # ── PATH B — EMA Momentum (trend continuation) ──────────────────
-    # EMA9 above EMA50 + ADX strong + RSI in healthy range
+    # EMA9 CROSSES above EMA50 + ADX strong + RSI in healthy range
+    # Crossover requirement prevents firing every candle in a trend
     path_b_long = (
         (df["ema_9"] > df["ema_50"]) &
+        (df["ema_9"].shift(1) <= df["ema_50"].shift(1)) &  # crossover event
         (adx > PATH_B_ADX_THRESH) &
         (df["rsi_14"] > PATH_B_RSI_LOW) &
         (df["rsi_14"] < PATH_B_RSI_HIGH)
     )
     path_b_short = (
         (df["ema_9"] < df["ema_50"]) &
+        (df["ema_9"].shift(1) >= df["ema_50"].shift(1)) &  # crossover event
         (adx > PATH_B_ADX_THRESH) &
         (df["rsi_14"] > (100 - PATH_B_RSI_HIGH)) &
         (df["rsi_14"] < (100 - PATH_B_RSI_LOW))

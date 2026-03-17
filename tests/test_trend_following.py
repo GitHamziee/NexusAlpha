@@ -90,30 +90,30 @@ class TestPopulateTrendEntries:
         assert df.loc[4, "tf_signal_tag"] == "tf_supertrend"
 
     def test_path_b_ema_momentum_long(self):
-        """Path B: EMA9 > EMA50 + ADX > 25 + RSI in range."""
+        """Path B: EMA9 crosses above EMA50 + ADX > 25 + RSI in range."""
         n = 3
         df = pd.DataFrame({
             "supertrend_direction": [1, 1, 1],
             "close": [51000, 51100, 51200],
-            "ema_9": [51000, 51100, 51200],   # above ema_50
+            "ema_9": [50400, 50450, 51200],   # crosses above ema_50 at idx 2
             "ema_50": [50500, 50500, 50500],
             "tf_adx": [20, 25, 30],  # > 25 at idx 2
             "bb_upper": [52000] * n,
             "bb_lower": [48000] * n,
             "rsi_14": [50, 55, 55],  # between 40-70
             "volume": [300, 300, 300],
-            "volume_sma_20": [400] * n,  # vol below avg (Path A won't fire)
+            "volume_sma_20": [400] * n,
         })
         df = populate_trend_entries(df)
         assert df.loc[2, "tf_enter_long"] == 1
 
     def test_path_b_ema_momentum_short(self):
-        """Path B short: EMA9 < EMA50 + ADX > 25 + RSI in range."""
+        """Path B short: EMA9 crosses below EMA50 + ADX > 25 + RSI in range."""
         n = 3
         df = pd.DataFrame({
             "supertrend_direction": [-1, -1, -1],
             "close": [49000, 48900, 48800],
-            "ema_9": [49000, 48900, 48800],   # below ema_50
+            "ema_9": [49600, 49550, 48800],   # crosses below ema_50 at idx 2
             "ema_50": [49500, 49500, 49500],
             "tf_adx": [20, 25, 30],
             "bb_upper": [52000] * n,
@@ -124,6 +124,25 @@ class TestPopulateTrendEntries:
         })
         df = populate_trend_entries(df)
         assert df.loc[2, "tf_enter_short"] == 1
+
+    def test_path_b_no_crossover_no_signal(self):
+        """Path B should NOT fire when EMA9 already above EMA50 (no crossover)."""
+        n = 3
+        df = pd.DataFrame({
+            "supertrend_direction": [1, 1, 1],
+            "close": [51000, 51100, 51200],
+            "ema_9": [51000, 51100, 51200],   # always above ema_50
+            "ema_50": [50500] * n,
+            "tf_adx": [30, 30, 30],
+            "bb_upper": [52000] * n,
+            "bb_lower": [48000] * n,
+            "rsi_14": [55, 55, 55],
+            "volume": [300, 300, 300],
+            "volume_sma_20": [400] * n,
+        })
+        df = populate_trend_entries(df)
+        # No crossover → Path B should not fire (Path A also won't: no ST flip, low vol)
+        assert df["tf_enter_long"].sum() == 0
 
     def test_path_c_bb_breakout_long(self):
         """Path C: Close > BB upper + ADX rising + volume spike."""
@@ -145,12 +164,12 @@ class TestPopulateTrendEntries:
 
     def test_or_logic_any_path_fires(self):
         """Any single path firing should produce a long signal."""
-        # Path B scenario: EMA cross + ADX + RSI
+        # Path B scenario: EMA crossover + ADX + RSI
         n = 3
         df = pd.DataFrame({
             "supertrend_direction": [1, 1, 1],
             "close": [51000, 51100, 51200],
-            "ema_9": [51000, 51100, 51200],
+            "ema_9": [50400, 50450, 51200],  # crosses above ema_50 at idx 2
             "ema_50": [50500] * n,
             "tf_adx": [20, 25, 30],
             "bb_upper": [52000] * n,
@@ -160,7 +179,7 @@ class TestPopulateTrendEntries:
             "volume_sma_20": [400] * n,
         })
         df = populate_trend_entries(df)
-        # Path B fires at idx 2 even though Path A doesn't (no ST flip, low vol)
+        # Path B fires at idx 2 (crossover + ADX + RSI)
         assert df.loc[2, "tf_enter_long"] == 1
 
     def test_no_path_fires_when_conditions_not_met(self):
