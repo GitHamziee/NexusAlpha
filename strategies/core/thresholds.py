@@ -66,8 +66,17 @@ STOCHRSI_RSI_PERIOD = 14
 STOCHRSI_STOCH_PERIOD = 3
 STOCHRSI_SMOOTH = 3
 
+# Pullback detection (shared across all pairs)
+TF_RSI_PULLBACK_LONG = 45              # RSI below this = pullback for longs
+TF_RSI_PULLBACK_SHORT = 55             # RSI above this = pullback for shorts
+
+# Trend quality filters
+TF_ADX_RISING_LOOKBACK = 3             # ADX must be rising over this many candles
+TF_EMA50_MIN_SLOPE = 0.001             # EMA50 must change >=0.1% over 10 candles
+TF_EMA50_SLOPE_LOOKBACK = 10           # candles to measure EMA50 slope
+
 # Exit thresholds (shared across all pairs)
-TF_ADX_DEATH_LEVEL = 18                # ADX death → exit trend
+TF_ADX_DEATH_LEVEL = 12                # ADX death → exit only truly dead trends
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MEAN REVERSION — shared constants
@@ -140,12 +149,17 @@ PAIR_CONFIGS: Dict[str, dict] = {
         "tf_adx_thresh": 20,
         "tf_rsi_low": 30,
         "tf_rsi_high": 70,
+        "tf_rsi_long_ceil": 60,             # longs: RSI must be below (not overbought)
+        "tf_rsi_short_floor": 40,           # shorts: RSI must be above (not oversold)
         "tf_volume_mult": 1.5,
+        # Pullback detection
+        "tf_pullback_lookback": 3,          # candles to scan for pullback
+        "tf_ema21_pullback_pct": 0.01,      # within 1% of EMA21 = pullback
         # Trend following exit
-        "tf_stop_atr_mult": 2.0,
-        "tf_tp1_atr_mult": 1.5,
-        "tf_tp2_atr_mult": 3.0,
-        "tf_time_stop": 20,
+        "tf_stop_atr_mult": 3.0,        # was 2.0 — wider to survive noise
+        "tf_tp1_atr_mult": 2.0,         # was 1.5 — give winners more room
+        "tf_tp2_atr_mult": 4.0,         # was 3.0
+        "tf_time_stop": 48,             # was 32 — 12 hours (patient with pullback entries)
         # Mean reversion entry
         "mr_rsi_oversold": 35,
         "mr_rsi_overbought": 65,
@@ -153,11 +167,12 @@ PAIR_CONFIGS: Dict[str, dict] = {
         "mr_bb_short_mult": 0.999,
         "mr_volume_mult": 1.2,
         # Mean reversion exit
-        "mr_stop_atr_mult": 1.5,
-        "mr_time_stop": 12,
+        "mr_stop_atr_mult": 2.5,        # was 1.5
+        "mr_time_stop": 16,             # was 12
         # BB
         "bb_std": 2.0,
-        # Hard stop ceiling
+        # Stop floors/ceilings
+        "min_stoploss_pct": -0.02,       # was -0.015 — wider to survive noise
         "max_stoploss_pct": -0.05,
     },
     "ETH/USDT:USDT": {
@@ -166,19 +181,24 @@ PAIR_CONFIGS: Dict[str, dict] = {
         "tf_adx_thresh": 22,
         "tf_rsi_low": 30,
         "tf_rsi_high": 70,
+        "tf_rsi_long_ceil": 60,
+        "tf_rsi_short_floor": 40,
         "tf_volume_mult": 1.5,
-        "tf_stop_atr_mult": 2.0,
-        "tf_tp1_atr_mult": 1.5,
-        "tf_tp2_atr_mult": 2.5,
-        "tf_time_stop": 16,
+        "tf_pullback_lookback": 3,
+        "tf_ema21_pullback_pct": 0.012,     # slightly wider for ETH volatility
+        "tf_stop_atr_mult": 3.0,        # was 2.0
+        "tf_tp1_atr_mult": 2.0,         # was 1.5
+        "tf_tp2_atr_mult": 3.5,         # was 2.5
+        "tf_time_stop": 40,             # was 28 — 10 hours
         "mr_rsi_oversold": 30,
         "mr_rsi_overbought": 70,
         "mr_bb_long_mult": 1.002,
         "mr_bb_short_mult": 0.998,
         "mr_volume_mult": 1.2,
-        "mr_stop_atr_mult": 1.5,
-        "mr_time_stop": 10,
+        "mr_stop_atr_mult": 2.5,        # was 1.5
+        "mr_time_stop": 14,             # was 10
         "bb_std": 2.0,
+        "min_stoploss_pct": -0.025,      # was -0.02 — wider for ETH
         "max_stoploss_pct": -0.06,
     },
     "SOL/USDT:USDT": {
@@ -187,19 +207,24 @@ PAIR_CONFIGS: Dict[str, dict] = {
         "tf_adx_thresh": 25,
         "tf_rsi_low": 30,
         "tf_rsi_high": 70,
+        "tf_rsi_long_ceil": 58,             # tighter for volatile SOL
+        "tf_rsi_short_floor": 42,
         "tf_volume_mult": 1.8,
-        "tf_stop_atr_mult": 2.5,
-        "tf_tp1_atr_mult": 2.0,
-        "tf_tp2_atr_mult": 3.5,
-        "tf_time_stop": 12,
+        "tf_pullback_lookback": 3,
+        "tf_ema21_pullback_pct": 0.015,     # wider for SOL volatility
+        "tf_stop_atr_mult": 3.5,        # was 2.5
+        "tf_tp1_atr_mult": 2.5,         # was 2.0
+        "tf_tp2_atr_mult": 5.0,         # was 3.5
+        "tf_time_stop": 36,             # was 24 — 9 hours
         "mr_rsi_oversold": 25,
         "mr_rsi_overbought": 75,
         "mr_bb_long_mult": 1.005,
         "mr_bb_short_mult": 0.995,
         "mr_volume_mult": 1.5,
-        "mr_stop_atr_mult": 2.0,
-        "mr_time_stop": 8,
+        "mr_stop_atr_mult": 3.0,        # was 2.0
+        "mr_time_stop": 10,             # was 8
         "bb_std": 2.5,
+        "min_stoploss_pct": -0.03,       # was -0.025 — wider for volatile SOL
         "max_stoploss_pct": -0.08,
     },
 }

@@ -1,19 +1,25 @@
 """
-Trend Following Strategy — Tiered confluence for balanced signal generation.
+Trend Following Strategy — Pullback entry with trend quality filters.
 
-Architecture: 3 hard gates (ALL must be true) + 2-of-4 confluence scoring.
+Architecture: 5 hard gates + 1-of-3 pullback + 2-of-4 confluence.
 Per-pair parameters loaded from thresholds.PAIR_CONFIGS.
 
-Hard gates:
-  1. Supertrend bullish (price above Supertrend line)
-  2. Close > EMA(50) (medium-term trend aligned)
-  3. RSI(14) between 30-70 (not at extremes)
+Hard gates (ALL must be true):
+  1. Supertrend direction (bullish for longs, bearish for shorts)
+  2. Close vs EMA(50) + EMA(50) slope confirms direction (no choppy markets)
+  3. Candle confirmation (bullish candle for longs, bearish for shorts)
+  4. RSI band (30-60 for longs, 40-70 for shorts — not overbought/oversold)
 
-Confluence score (need >= 2 of 4):
-  A. EMA(9) > EMA(21) (short-term trend aligned)
-  B. ADX(14) > threshold (trend has strength)
-  C. Volume > threshold x SMA(20) (participation)
-  D. Close > EMA(200) (major trend aligned)
+Pullback detection (need >= 1 of 3):
+  A. EMA(21) test: low touched EMA(21) within last 3 candles + bounced
+  B. RSI dip: RSI dropped below 45 within last 3 candles + recovering
+  C. BB middle test: low touched BB middle within last 3 candles + bounced
+
+Confluence (need >= 2 of 4):
+  A. ADX rising (trend strengthening, catches early trends)
+  B. Volume > threshold x SMA(20) (participation)
+  C. Close vs EMA(200) (major trend aligned)
+  D. EMA(50) slope strength (trend is established)
 
 Conditions 1-2 (regime gate, MTF) and cooldown are handled externally.
 """
@@ -37,9 +43,14 @@ from .thresholds import (
     STOCHRSI_SMOOTH,
     STOCHRSI_STOCH_PERIOD,
     TF_ADX_DEATH_LEVEL as ADX_DEATH_LEVEL,
+    TF_ADX_RISING_LOOKBACK,
     TF_EMA_FAST as EMA_FAST,
     TF_EMA_MID as EMA_MID,
     TF_EMA_SLOW as EMA_SLOW,
+    TF_EMA50_MIN_SLOPE,
+    TF_EMA50_SLOPE_LOOKBACK,
+    TF_RSI_PULLBACK_LONG,
+    TF_RSI_PULLBACK_SHORT,
     VOLUME_SMA_PERIOD,
     get_pair_config,
 )
@@ -79,6 +90,12 @@ def add_trend_indicators(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.Da
     df["ema_21"] = ta.ema(df["close"], length=EMA_MID)
     df["ema_50"] = ta.ema(df["close"], length=EMA_50)
     df["ema_200"] = ta.ema(df["close"], length=EMA_SLOW)
+
+    # EMA50 slope — measures if EMA50 is actually trending or flat
+    df["ema_50_slope"] = (
+        (df["ema_50"] - df["ema_50"].shift(TF_EMA50_SLOPE_LOOKBACK))
+        / df["ema_50"].shift(TF_EMA50_SLOPE_LOOKBACK)
+    )
 
     # StochRSI (kept for logging/ML, not hard-gated)
     stochrsi = ta.stochrsi(df["close"], length=STOCHRSI_RSI_PERIOD,
@@ -123,10 +140,10 @@ def add_trend_indicators(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.Da
 
 
 def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.DataFrame:
-    """Add trend following entry signals using tiered confluence.
+    """Add trend following entry signals using pullback + trend quality filters.
 
     Adds columns: tf_enter_long, tf_enter_short, tf_signal_tag.
-    3 hard gates (ALL must be true) + 2-of-4 confluence scoring.
+    5 hard gates + 1-of-3 pullback detection + 2-of-4 confluence.
     Regime gate and cooldown are handled externally.
     """
     if df.empty:
@@ -136,43 +153,92 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
         return df
 
     cfg = get_pair_config(pair)
+    lookback = cfg.get("tf_pullback_lookback", 3)
+    ema21_pct = cfg.get("tf_ema21_pullback_pct", 0.01)
+
+    # EMA50 slope (computed in add_trend_indicators, fallback if missing)
+    ema50_slope = df.get("ema_50_slope", pd.Series(0.0, index=df.index))
 
     # ── LONG ─────────────────────────────────────────────────────────────
 
     # Hard gates (ALL must be true)
-    gate_1 = df["supertrend_direction"] == 1                          # Supertrend bullish
-    gate_2 = df["close"] > df["ema_50"]                               # above medium-term trend
-    gate_3 = (df["rsi_14"] > cfg["tf_rsi_low"]) & \
-             (df["rsi_14"] < cfg["tf_rsi_high"])                      # RSI not extreme
+    gate_1 = df["supertrend_direction"] == 1                           # Supertrend bullish
+    gate_2 = (df["close"] > df["ema_50"]) & \
+             (ema50_slope > TF_EMA50_MIN_SLOPE)                        # above EMA50 + trending up
+    gate_3 = df["close"] > df["open"]                                  # bullish candle (momentum)
+    gate_4 = (df["rsi_14"] > cfg["tf_rsi_low"]) & \
+             (df["rsi_14"] < cfg.get("tf_rsi_long_ceil", 60))         # RSI 30-60 (room to run)
 
-    hard_gate_long = gate_1 & gate_2 & gate_3
+    hard_gate_long = gate_1 & gate_2 & gate_3 & gate_4
+
+    # Pullback detection (need >= 1 of 3)
+    # A: EMA(21) test — low touched EMA21 within lookback + bounced above
+    low_to_ema21 = df["low"] / df["ema_21"]
+    pullback_a = (low_to_ema21.rolling(window=lookback, min_periods=1).min()
+                  <= 1.0 + ema21_pct) & (df["close"] > df["ema_21"])
+
+    # B: RSI dip — RSI dropped below threshold within lookback + recovering
+    pullback_b = (df["rsi_14"].rolling(window=lookback, min_periods=1).min()
+                  < TF_RSI_PULLBACK_LONG) & (df["rsi_14"] > 40)
+
+    # C: BB middle test — low touched BB middle within lookback + bounced
+    bb_mid = df.get("bb_middle", pd.Series(dtype=float))
+    if bb_mid.notna().any():
+        low_to_bbm = df["low"] / bb_mid
+        pullback_c = (low_to_bbm.rolling(window=lookback, min_periods=1).min()
+                      <= 1.0) & (df["close"] > bb_mid)
+    else:
+        pullback_c = pd.Series(False, index=df.index)
+
+    has_pullback_long = pullback_a | pullback_b | pullback_c
 
     # Confluence scoring (need >= 2 of 4)
-    score_a = (df["ema_9"] > df["ema_21"]).astype(int)                # short-term trend aligned
-    score_b = (df["tf_adx"] > cfg["tf_adx_thresh"]).astype(int)       # trend strength
-    score_c = (df["volume"] > df["volume_sma_20"] * cfg["tf_volume_mult"]).astype(int)  # volume
-    score_d = (df["close"] > df["ema_200"]).astype(int)               # major trend aligned
+    # A: ADX rising — trend is strengthening (catches early trends)
+    score_a = (df["tf_adx"] > df["tf_adx"].shift(TF_ADX_RISING_LOOKBACK)).astype(int)
+    score_b = (df["volume"] > df["volume_sma_20"] * cfg["tf_volume_mult"]).astype(int)
+    score_c = (df["close"] > df["ema_200"]).astype(int)                # major trend aligned
+    # D: EMA50 slope strength — trend is well established
+    score_d = (ema50_slope > TF_EMA50_MIN_SLOPE * 2).astype(int)       # slope > 0.2%
 
     confluence_long = score_a + score_b + score_c + score_d
     has_confluence_long = confluence_long >= 2
 
-    long_cond = hard_gate_long & has_confluence_long
+    long_cond = hard_gate_long & has_pullback_long & has_confluence_long
 
     # ── SHORT (mirror) ───────────────────────────────────────────────────
 
-    gate_1s = df["supertrend_direction"] == -1                         # Supertrend bearish
-    gate_2s = df["close"] < df["ema_50"]                               # below medium-term trend
-    gate_3s = gate_3                                                    # same RSI band
+    gate_1s = df["supertrend_direction"] == -1                          # Supertrend bearish
+    gate_2s = (df["close"] < df["ema_50"]) & \
+              (ema50_slope < -TF_EMA50_MIN_SLOPE)                       # below EMA50 + trending dn
+    gate_3s = df["close"] < df["open"]                                  # bearish candle
+    gate_4s = (df["rsi_14"] > cfg.get("tf_rsi_short_floor", 40)) & \
+              (df["rsi_14"] < cfg["tf_rsi_high"])                       # RSI 40-70
 
-    hard_gate_short = gate_1s & gate_2s & gate_3s
+    hard_gate_short = gate_1s & gate_2s & gate_3s & gate_4s
 
-    score_as = (df["ema_9"] < df["ema_21"]).astype(int)                # short-term trend down
-    score_ds = (df["close"] < df["ema_200"]).astype(int)               # below major trend
+    # Pullback: price bounced UP to resistance then resumed down
+    high_to_ema21 = df["high"] / df["ema_21"]
+    pullback_as = (high_to_ema21.rolling(window=lookback, min_periods=1).max()
+                   >= 1.0 - ema21_pct) & (df["close"] < df["ema_21"])
 
-    confluence_short = score_as + score_b + score_c + score_ds
+    pullback_bs = (df["rsi_14"].rolling(window=lookback, min_periods=1).max()
+                   > TF_RSI_PULLBACK_SHORT) & (df["rsi_14"] < 60)
+
+    if bb_mid.notna().any():
+        high_to_bbm = df["high"] / bb_mid
+        pullback_cs = (high_to_bbm.rolling(window=lookback, min_periods=1).max()
+                       >= 1.0) & (df["close"] < bb_mid)
+    else:
+        pullback_cs = pd.Series(False, index=df.index)
+
+    has_pullback_short = pullback_as | pullback_bs | pullback_cs
+
+    score_cs = (df["close"] < df["ema_200"]).astype(int)                # below major trend
+    score_ds = (ema50_slope < -TF_EMA50_MIN_SLOPE * 2).astype(int)     # downtrend established
+    confluence_short = score_a + score_b + score_cs + score_ds
     has_confluence_short = confluence_short >= 2
 
-    short_cond = hard_gate_short & has_confluence_short
+    short_cond = hard_gate_short & has_pullback_short & has_confluence_short
 
     # ── OUTPUT ───────────────────────────────────────────────────────────
     df["tf_enter_long"] = long_cond.astype(int).fillna(0).astype(int)

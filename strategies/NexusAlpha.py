@@ -230,13 +230,14 @@ class NexusAlpha(IStrategy):
         dataframe.loc[short_tf, "enter_short"] = 1
         dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "enter_tag"] = "trend_following_short"
 
-        # Mean Reversion (only if no TF signal on same candle)
-        long_mr = (dataframe["mr_enter_long"] == 1) & (dataframe["enter_long"] == 0)
-        short_mr = (dataframe["mr_enter_short"] == 1) & (dataframe["enter_short"] == 0)
-        dataframe.loc[long_mr, "enter_long"] = 1
-        dataframe.loc[long_mr, "enter_tag"] = "mean_reversion_long"
-        dataframe.loc[short_mr, "enter_short"] = 1
-        dataframe.loc[short_mr, "enter_tag"] = "mean_reversion_short"
+        # Mean Reversion — DISABLED (12% win rate destroys edge)
+        # MR indicators still computed for regime detection, just no entries.
+        # long_mr = (dataframe["mr_enter_long"] == 1) & (dataframe["enter_long"] == 0)
+        # short_mr = (dataframe["mr_enter_short"] == 1) & (dataframe["enter_short"] == 0)
+        # dataframe.loc[long_mr, "enter_long"] = 1
+        # dataframe.loc[long_mr, "enter_tag"] = "mean_reversion_long"
+        # dataframe.loc[short_mr, "enter_short"] = 1
+        # dataframe.loc[short_mr, "enter_tag"] = "mean_reversion_short"
 
         # Funding Rate (lowest priority)
         long_fr = (dataframe["fr_enter_long"] == 1) & (dataframe["enter_long"] == 0)
@@ -311,34 +312,37 @@ class NexusAlpha(IStrategy):
         after_fill: bool,
         **kwargs,
     ) -> float:
-        """ATR-based stop + TP-based trailing + dynamic ATR scaling."""
+        """Fixed ATR stop from entry + TP trailing + time stop.
+
+        Key design: uses entry-time ATR (not current) to prevent
+        Freqtrade's one-way ratchet from tightening stops as ATR
+        decreases after entry.
+        """
 
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if dataframe.empty:
-            return -0.03
+            return self.stoploss
 
         last = dataframe.iloc[-1]
-        atr = last.get("atr_14", 0)
-        atr_sma = last.get("atr_14_sma", atr)
         entry_rate = trade.open_rate
 
-        if entry_rate <= 0 or atr <= 0:
-            return -0.03
+        if entry_rate <= 0:
+            return self.stoploss
 
         tag = trade.enter_tag or ""
         cfg = get_pair_config(pair)
 
+        # ── Look up ATR at entry time (fixed, no ratchet) ─────────────
+        entry_atr = self._get_entry_atr(dataframe, trade)
+        if entry_atr <= 0:
+            return self.stoploss
+
         # Base multiplier per signal path + pair
         base_mult = self._get_base_stop_mult(tag, pair)
 
-        # Dynamic scaling: widen stop when vol spikes
-        scaled_mult = scale_atr_stop(base_mult, atr, atr_sma)
-
         # ── TP-based trailing (per-pair TP levels) ─────────────────────
-        tp1_mult = cfg["tf_tp1_atr_mult"] if "trend_following" in tag else cfg["tf_tp1_atr_mult"]
-        tp2_mult = cfg["tf_tp2_atr_mult"] if "trend_following" in tag else cfg["tf_tp2_atr_mult"]
-        tp1_pct = tp1_mult * atr / entry_rate
-        tp2_pct = tp2_mult * atr / entry_rate
+        tp1_pct = cfg["tf_tp1_atr_mult"] * entry_atr / entry_rate
+        tp2_pct = cfg["tf_tp2_atr_mult"] * entry_atr / entry_rate
 
         if current_profit >= tp2_pct:
             # Lock in 80% of TP1-level gains
@@ -346,26 +350,47 @@ class NexusAlpha(IStrategy):
             return ((1 + locked) / (1 + current_profit)) - 1
 
         if current_profit >= tp1_pct:
-            # Move stop to breakeven
+            # Move stop to breakeven (+0.1% cushion)
             return (1.001 / (1 + current_profit)) - 1
 
         # ── Time stop: force close if trade has stalled ────────────────
         trade_candles = (current_time - trade.open_date).total_seconds() / 900
         is_tf = "trend_following" in tag
         is_mr = "mean_reversion" in tag
-        tf_time_stop = cfg["tf_time_stop"]
-        mr_time_stop = cfg["mr_time_stop"]
-        if is_tf and trade_candles > tf_time_stop and current_profit < 0.005:
+        if is_tf and trade_candles > cfg["tf_time_stop"] and current_profit < 0:
             return -0.001
-        if is_mr and trade_candles > mr_time_stop and current_profit < 0.005:
+        if is_mr and trade_candles > cfg["mr_time_stop"] and current_profit < 0:
             return -0.001
 
-        # ── Normal ATR-based stop ──────────────────────────────────────
-        stop_distance = scaled_mult * atr
+        # ── Fixed ATR-based stop from entry ────────────────────────────
+        stop_distance = base_mult * entry_atr
         stop_pct = -(stop_distance / entry_rate)
 
-        # Clamp: per-pair max stoploss
-        return max(stop_pct, cfg["max_stoploss_pct"])
+        # Clamp between min and max (never too tight, never too wide)
+        min_stop = cfg.get("min_stoploss_pct", -0.015)
+        stop_pct = min(stop_pct, min_stop)           # enforce minimum width
+        return max(stop_pct, cfg["max_stoploss_pct"])  # enforce maximum width
+
+    def _get_entry_atr(self, dataframe: pd.DataFrame, trade: Trade) -> float:
+        """Look up ATR at the candle when the trade was opened."""
+        if dataframe.empty or "atr_14" not in dataframe.columns:
+            return 0.0
+
+        # Use stored entry ATR if available (set in order_filled)
+        stored = getattr(trade, "_atr_at_entry", None)
+        if stored and stored > 0:
+            return stored
+
+        # Fallback: find the candle closest to trade entry
+        if "date" in dataframe.columns:
+            trade_date = trade.open_date_utc
+            mask = dataframe["date"] <= trade_date
+            if mask.any():
+                return float(dataframe.loc[mask, "atr_14"].iloc[-1])
+
+        # Last resort: use first available ATR
+        valid = dataframe["atr_14"].dropna()
+        return float(valid.iloc[0]) if len(valid) > 0 else 0.0
 
     # ─── confirm_trade_entry ───────────────────────────────────────────
 

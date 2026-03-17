@@ -324,14 +324,15 @@ class TestStrategyExits:
         assert df.loc[2, "mr_exit_long"] == 1  # regime changed
 
     def test_trend_adx_death_exit(self):
-        """Trend following should exit when ADX drops below 18."""
+        """Trend following should exit when ADX drops below 12 (truly dead)."""
         df = pd.DataFrame({
-            "tf_adx": [30, 25, 20, 15, 12],
+            "tf_adx": [30, 25, 20, 15, 10],
             "supertrend_direction": [1, 1, 1, 1, 1],
         })
         df = populate_trend_exits(df)
         assert df.loc[0, "tf_exit_long"] == 0
-        assert df.loc[3, "tf_exit_long"] == 1
+        assert df.loc[3, "tf_exit_long"] == 0   # ADX=15 still alive
+        assert df.loc[4, "tf_exit_long"] == 1    # ADX=10 truly dead
 
 
 # ── Test 8: Signal logging ──────────────────────────────────────────────
