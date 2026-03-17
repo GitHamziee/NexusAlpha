@@ -27,32 +27,32 @@ from freqtrade.strategy import (
     merge_informative_pair,
 )
 
-from strategies.core.funding_rate import (
+from .core.funding_rate import (
     STOP_ATR_MULT as FR_STOP_ATR_MULT,
     add_funding_indicators,
     populate_funding_entries,
     populate_funding_exits,
 )
-from strategies.core.mean_reversion import (
+from .core.mean_reversion import (
     STOP_ATR_MULT as MR_STOP_ATR_MULT,
     TIME_STOP_CANDLES as MR_TIME_STOP,
     add_mr_indicators,
     populate_mr_entries,
     populate_mr_exits,
 )
-from strategies.core.regime_detector import (
+from .core.regime_detector import (
     add_regime_indicators,
     apply_multitf_confirmation,
     apply_regime,
 )
-from strategies.core.trend_following import (
+from .core.trend_following import (
     STOP_ATR_MULT as TF_STOP_ATR_MULT,
     TIME_STOP_CANDLES as TF_TIME_STOP,
     add_trend_indicators,
     populate_trend_entries,
     populate_trend_exits,
 )
-from strategies.risk.risk_manager import (
+from .risk.risk_manager import (
     calculate_position_size,
     get_risk_percent,
     scale_atr_stop,
