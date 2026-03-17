@@ -1,5 +1,5 @@
 # Indicators
-pandas-ta==0.3.14b1
+pandas-ta>=0.3.14b1
 
 # Data & API
 requests==2.32.3
