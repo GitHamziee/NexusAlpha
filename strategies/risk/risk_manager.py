@@ -11,7 +11,7 @@ Non-negotiable rules (from spec Section VIII):
 - 3% daily drawdown → stop trading today
 - 15% total drawdown → full system review
 - 4-candle cooldown after every loss
-- Confidence-scaled sizing: >=0.8 → 1%, 0.6-0.8 → 0.5%, <0.6 → NO TRADE
+- Confidence-scaled sizing: >=0.8 → 1%, 0.6-0.8 → 0.5%, 0.25-0.6 → 0.25%, <0.25 → NO TRADE
 
 Dynamic ATR stop scaling: when ATR > 1.5x its 100-period SMA, widen stops
 proportionally and shrink position so dollar risk stays constant.
@@ -24,6 +24,7 @@ from typing import Optional
 
 try:
     from core.thresholds import (  # noqa: F401  (Docker / freqtrade)
+        CONFIRM_MIN_CONFIDENCE,
         COOLDOWN_CANDLES,
         FUNDING_RISK_PER_TRADE,
         MAX_BALANCE_FRACTION,
@@ -38,6 +39,7 @@ try:
     )
 except ModuleNotFoundError:
     from strategies.core.thresholds import (  # noqa: F401  (pytest)
+        CONFIRM_MIN_CONFIDENCE,
         COOLDOWN_CANDLES,
         FUNDING_RISK_PER_TRADE,
         MAX_BALANCE_FRACTION,
@@ -58,9 +60,9 @@ def get_risk_percent(regime_confidence: float, is_funding: bool = False) -> floa
     """Return per-trade risk as a decimal based on regime confidence.
 
     Funding rate trades are always half-size regardless of confidence.
-    Confidence < 0.5 → 0.0 (no trade allowed).
+    Confidence < CONFIRM_MIN_CONFIDENCE (0.25) → 0.0 (no trade allowed).
     """
-    if regime_confidence < 0.5:
+    if regime_confidence < CONFIRM_MIN_CONFIDENCE:
         return 0.0
 
     if is_funding:
@@ -70,8 +72,51 @@ def get_risk_percent(regime_confidence: float, is_funding: bool = False) -> floa
         return MAX_RISK_PER_TRADE  # 1.0%
     if regime_confidence >= 0.6:
         return MAX_RISK_PER_TRADE / 2  # 0.5%
-    # 0.5 <= confidence < 0.6
+    # CONFIRM_MIN_CONFIDENCE <= confidence < 0.6
     return MAX_RISK_PER_TRADE / 4  # 0.25%
+
+
+# Regime-signal alignment map: which regimes "match" which signal types
+_REGIME_SIGNAL_MATCH = {
+    "TRENDING_BULL": "tf",
+    "TRENDING_BEAR": "tf",
+    "RANGING": "mr",
+    "TRANSITION": None,  # no natural match — half size
+    "VOLATILE": None,    # quarter size
+}
+
+
+def get_regime_adjusted_risk(
+    regime: str,
+    regime_confidence: float,
+    signal_type: str,
+    is_funding: bool = False,
+) -> float:
+    """Return regime-aware risk percent.
+
+    - Matching regime+signal (e.g. TRENDING + tf) → full confidence-tier risk
+    - Mismatched (e.g. RANGING + tf) → half of confidence-tier risk
+    - VOLATILE → quarter of confidence-tier risk
+    - Below CONFIRM_MIN_CONFIDENCE → 0.0 (no trade)
+    """
+    base_risk = get_risk_percent(regime_confidence, is_funding)
+    if base_risk == 0.0:
+        return 0.0
+
+    # Funding always gets its fixed rate
+    if is_funding:
+        return base_risk
+
+    # VOLATILE → always quarter size
+    if regime == "VOLATILE":
+        return base_risk / 4
+
+    # Check regime-signal alignment
+    matched_signal = _REGIME_SIGNAL_MATCH.get(regime)
+    if matched_signal == signal_type:
+        return base_risk  # full size
+    else:
+        return base_risk / 2  # half size for mismatch or TRANSITION
 
 
 def calculate_position_size(

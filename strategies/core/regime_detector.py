@@ -1,9 +1,9 @@
 """
 Regime Detector — Layer 1 of the 6-layer signal filter.
 
-Classifies market into 5 regimes using adaptive thresholds so the system
-only runs strategies that match the current market state.  This single
-filter eliminates ~60 % of losing trades.
+Classifies market into 5 regimes using adaptive thresholds.  Regime is
+a soft gate: it affects position sizing and strategy preference, but does
+not hard-block trades (except for truly unknown data).
 
 Adaptive thresholds: instead of fixed ADX 18/28, we track a 100-period
 SMA of ADX and derive the range/trend boundaries from that baseline.
@@ -35,6 +35,8 @@ from .thresholds import (
     BB_STD,
     EMA_SLOPE_LOOKBACK,
     EMA_SLOPE_PERIOD,
+    REGIME_MTF_PENALTY,
+    REGIME_TRANSITION_CONFIDENCE,
     VOLATILITY_SMA_PERIOD,
 )
 
@@ -120,7 +122,7 @@ def classify_regime(
     ADX) so the detector tracks structural changes in volatility.
 
     Returns (regime_label, confidence) where confidence is in [0.0, 0.9].
-    TRANSITION always returns confidence 0.0 to block all trades.
+    TRANSITION returns low confidence (soft gate, not hard block).
     """
     # ── bail on missing data ─────────────────────────────────────────
     if _any_nan(adx, plus_di, minus_di, bb_width, bb_width_sma,
@@ -149,9 +151,9 @@ def classify_regime(
         confidence = min(0.8, (range_thresh - adx) / 12.0)
         return RANGING, confidence
 
-    # ── TRANSITION — DO NOT TRADE ────────────────────────────────────
+    # ── TRANSITION — soft gate (reduced confidence, not blocked) ─────
     if range_thresh <= adx <= trend_thresh:
-        return TRANSITION, 0.0
+        return TRANSITION, REGIME_TRANSITION_CONFIDENCE
 
     # ── fallback: if nothing matched, treat as ranging with low conf ─
     return RANGING, 0.5
@@ -207,8 +209,8 @@ def confirm_regime_multitf(
     if regime_15m == regime_1h:
         return regime_15m, conf_15m
 
-    # Disagreement → reduce confidence by 25% (keeps more signals viable)
-    adjusted = conf_15m * 0.75
+    # Disagreement → reduce confidence (soft penalty)
+    adjusted = conf_15m * REGIME_MTF_PENALTY
     return regime_15m, adjusted
 
 

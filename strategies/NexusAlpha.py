@@ -58,8 +58,10 @@ from core.trend_following import (
     populate_trend_entries,
     populate_trend_exits,
 )
+from core.thresholds import CONFIRM_MIN_CONFIDENCE
 from risk.risk_manager import (
     calculate_position_size,
+    get_regime_adjusted_risk,
     get_risk_percent,
     scale_atr_stop,
 )
@@ -101,14 +103,11 @@ TRADE_COLUMNS = [
 
 class NexusAlpha(IStrategy):
     """
-    Regime-adaptive strategy using 3 sub-strategies with risk management.
+    Regime-adaptive strategy using 3 sub-strategies with OR-of-simple-groups.
 
-    Filtering pipeline:
-        Layer 1: Regime gate (kills ~60%)
-        Layer 2: Multi-TF confirmation (kills ~40%)
-        Layer 3: Confluence (3+ indicators align)
-        Layer 4: Volume + momentum confirmation
-        Layer 5: Risk gate (drawdown, cooldown, position sizing)
+    Each sub-strategy has 3 independent signal paths (2-3 conditions each).
+    Any ONE path firing triggers an entry. Regime is a soft gate that
+    affects position sizing, not signal blocking.
     """
 
     # ─── Freqtrade Configuration ───────────────────────────────────────
@@ -209,33 +208,37 @@ class NexusAlpha(IStrategy):
     # ─── populate_entry_trend ──────────────────────────────────────────
 
     def populate_entry_trend(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
-        """Layer 1-4 filtering: run all strategy entries, tag with strategy name."""
+        """Run all strategy entries, merge with priority, tag with signal path."""
 
         dataframe.loc[:, "enter_long"] = 0
         dataframe.loc[:, "enter_short"] = 0
         dataframe.loc[:, "enter_tag"] = ""
 
-        # Strategy entry signals (each checks regime internally)
+        # Strategy entry signals (no regime hard-gate — soft gate in confirm_trade_entry)
         dataframe = populate_trend_entries(dataframe)
         dataframe = populate_mr_entries(dataframe)
         dataframe = populate_funding_entries(dataframe)
 
-        # Merge signals — first strategy to fire wins (priority: trend > MR > funding)
+        # Merge signals — priority: TF > MR > FR
+        # Each sub-strategy provides a signal_tag column with the specific path name
+
         # Trend Following
         long_tf = dataframe["tf_enter_long"] == 1
         short_tf = dataframe["tf_enter_short"] == 1
         dataframe.loc[long_tf, "enter_long"] = 1
-        dataframe.loc[long_tf, "enter_tag"] = "trend_following_long"
+        dataframe.loc[long_tf, "enter_tag"] = dataframe.loc[long_tf, "tf_signal_tag"] + "_long"
         dataframe.loc[short_tf, "enter_short"] = 1
-        dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "enter_tag"] = "trend_following_short"
+        dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "enter_tag"] = (
+            dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "tf_signal_tag"] + "_short"
+        )
 
-        # Mean Reversion (only if no trend signal on same candle)
+        # Mean Reversion (only if no TF signal on same candle)
         long_mr = (dataframe["mr_enter_long"] == 1) & (dataframe["enter_long"] == 0)
         short_mr = (dataframe["mr_enter_short"] == 1) & (dataframe["enter_short"] == 0)
         dataframe.loc[long_mr, "enter_long"] = 1
-        dataframe.loc[long_mr, "enter_tag"] = "mean_reversion_long"
+        dataframe.loc[long_mr, "enter_tag"] = dataframe.loc[long_mr, "mr_signal_tag"] + "_long"
         dataframe.loc[short_mr, "enter_short"] = 1
-        dataframe.loc[short_mr, "enter_tag"] = "mean_reversion_short"
+        dataframe.loc[short_mr, "enter_tag"] = dataframe.loc[short_mr, "mr_signal_tag"] + "_short"
 
         # Funding Rate (lowest priority)
         long_fr = (dataframe["fr_enter_long"] == 1) & (dataframe["enter_long"] == 0)
@@ -313,11 +316,17 @@ class NexusAlpha(IStrategy):
 
         tag = trade.enter_tag or ""
 
-        # Base multiplier per strategy
-        if "trend_following" in tag:
-            base_mult = TF_STOP_ATR_MULT  # 2.0
-        elif "mean_reversion" in tag:
-            base_mult = MR_STOP_ATR_MULT  # 1.5
+        # Base multiplier per signal path
+        if "tf_" in tag or "trend_following" in tag:
+            if "bb_breakout" in tag:
+                base_mult = 1.5  # tighter for breakouts (should follow through)
+            else:
+                base_mult = TF_STOP_ATR_MULT  # 2.0
+        elif "mr_" in tag or "mean_reversion" in tag:
+            if "rsi_bounce" in tag:
+                base_mult = 3.0  # wider for deep reversals
+            else:
+                base_mult = MR_STOP_ATR_MULT  # 2.5
         elif "funding_rate" in tag:
             base_mult = FR_STOP_ATR_MULT  # 3.0
         else:
@@ -331,9 +340,11 @@ class NexusAlpha(IStrategy):
 
         # Time stop: if trade has been open too long without profit
         trade_candles = (current_time - trade.open_date).total_seconds() / 900  # 15m candles
-        if "trend_following" in tag and trade_candles > TF_TIME_STOP and current_profit < 0.005:
+        is_tf = "tf_" in tag or "trend_following" in tag
+        is_mr = "mr_" in tag or "mean_reversion" in tag
+        if is_tf and trade_candles > TF_TIME_STOP and current_profit < 0.005:
             return -0.001  # force close
-        if "mean_reversion" in tag and trade_candles > MR_TIME_STOP and current_profit < 0.005:
+        if is_mr and trade_candles > MR_TIME_STOP and current_profit < 0.005:
             return -0.001
 
         # Clamp: never tighter than -1.5% (avoids same-candle stop-outs on 15m)
@@ -362,12 +373,23 @@ class NexusAlpha(IStrategy):
 
         last = dataframe.iloc[-1]
 
-        # Risk check: confidence threshold
+        # Soft regime gate: only block on truly unknown confidence
         confidence = last.get("regime_confidence", 0)
-        is_funding = "funding_rate" in (entry_tag or "")
-        risk_pct = get_risk_percent(confidence, is_funding)
+        regime = last.get("regime", "TRANSITION")
+        tag = entry_tag or ""
+        is_funding = "funding_rate" in tag
+
+        # Determine signal type for regime-aware sizing
+        if "tf_" in tag or "trend_following" in tag:
+            signal_type = "tf"
+        elif "mr_" in tag or "mean_reversion" in tag:
+            signal_type = "mr"
+        else:
+            signal_type = "fr"
+
+        risk_pct = get_regime_adjusted_risk(regime, confidence, signal_type, is_funding)
         if risk_pct == 0.0:
-            logger.info("Trade rejected: confidence %.2f too low", confidence)
+            logger.info("Trade rejected: confidence %.2f too low (regime=%s)", confidence, regime)
             return False
 
         # Log signal features for future ML training
@@ -452,8 +474,19 @@ class NexusAlpha(IStrategy):
 
         last = dataframe.iloc[-1]
         confidence = last.get("regime_confidence", 0)
-        is_funding = "funding_rate" in (entry_tag or "")
-        risk_pct = get_risk_percent(confidence, is_funding)
+        regime = last.get("regime", "TRANSITION")
+        tag = entry_tag or ""
+        is_funding = "funding_rate" in tag
+
+        # Determine signal type for regime-aware sizing
+        if "tf_" in tag or "trend_following" in tag:
+            signal_type = "tf"
+        elif "mr_" in tag or "mean_reversion" in tag:
+            signal_type = "mr"
+        else:
+            signal_type = "fr"
+
+        risk_pct = get_regime_adjusted_risk(regime, confidence, signal_type, is_funding)
 
         if risk_pct == 0.0:
             return 0
@@ -461,11 +494,16 @@ class NexusAlpha(IStrategy):
         atr = last.get("atr_14", 0)
         atr_sma = last.get("atr_14_sma", atr)
 
-        tag = entry_tag or ""
-        if "trend_following" in tag:
-            base_mult = TF_STOP_ATR_MULT
-        elif "mean_reversion" in tag:
-            base_mult = MR_STOP_ATR_MULT
+        if "tf_" in tag or "trend_following" in tag:
+            if "bb_breakout" in tag:
+                base_mult = 1.5
+            else:
+                base_mult = TF_STOP_ATR_MULT
+        elif "mr_" in tag or "mean_reversion" in tag:
+            if "rsi_bounce" in tag:
+                base_mult = 3.0
+            else:
+                base_mult = MR_STOP_ATR_MULT
         elif "funding_rate" in tag:
             base_mult = FR_STOP_ATR_MULT
         else:

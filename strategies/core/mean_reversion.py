@@ -1,11 +1,14 @@
 """
-Mean Reversion Strategy — BB bounce entries in confirmed ranges.
+Mean Reversion Strategy — 3 independent paths for mean reversion entries.
 
-Active when: Regime = RANGING, confidence >= 0.6.
-Highest win-rate strategy (70-80%) because BB middle acts as a statistical
-magnet — price reverts to the mean ~68% of the time within 2 std devs.
+Uses OR-of-simple-groups pattern: any ONE signal path can trigger an entry.
+Each path has only 2-3 conditions (vs. the old 9-condition AND approach).
 
-9 entry conditions per side must ALL be true simultaneously.
+Path A — BB Bounce: close at/below lower BB + RSI oversold
+Path B — MACD Reversal: close near lower BB + MACD turning + bullish candle
+Path C — RSI Bounce: deep RSI oversold + bullish candle + volume
+
+Regime is a soft gate (affects sizing in NexusAlpha.py, not signal blocking).
 """
 
 from __future__ import annotations
@@ -20,17 +23,16 @@ from .thresholds import (
     ATR_PERIOD,
     BB_PERIOD,
     BB_STD,
-    MR_BB_TOUCH_LONG_MULT as BB_TOUCH_LONG_MULT,
-    MR_BB_TOUCH_SHORT_MULT as BB_TOUCH_SHORT_MULT,
     MR_EMA_SLOW as EMA_SLOW,
     MR_MACD_FAST as MACD_FAST,
     MR_MACD_SIGNAL as MACD_SIGNAL,
     MR_MACD_SLOW as MACD_SLOW,
-    MR_RSI_OVERBOUGHT as RSI_OVERBOUGHT,
-    MR_RSI_OVERSOLD as RSI_OVERSOLD,
+    MR_PATH_A_RSI as PATH_A_RSI,
+    MR_PATH_B_BB_PROXIMITY as PATH_B_BB_PROXIMITY,
+    MR_PATH_C_RSI as PATH_C_RSI,
+    MR_PATH_C_VOLUME_MULT as PATH_C_VOLUME_MULT,
     MR_STOP_ATR_MULT as STOP_ATR_MULT,
     MR_TIME_STOP_CANDLES as TIME_STOP_CANDLES,
-    MR_VOLUME_MULT as VOLUME_MULT,
     RSI_PERIOD,
     VOLUME_SMA_PERIOD,
 )
@@ -84,54 +86,78 @@ def add_mr_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
-    """Add mean reversion entry signals.
+    """Add mean reversion entry signals using 3 OR'd signal paths.
 
-    Adds columns: mr_enter_long, mr_enter_short.
+    Adds columns: mr_enter_long, mr_enter_short, mr_signal_tag.
+    Any ONE path firing is sufficient for an entry signal.
+    Regime is NOT checked here — it's a soft gate handled in NexusAlpha.py.
     """
     if df.empty:
         df["mr_enter_long"] = pd.Series(dtype=int)
         df["mr_enter_short"] = pd.Series(dtype=int)
+        df["mr_signal_tag"] = pd.Series(dtype=str)
         return df
 
     hist = df["mr_macd_hist"]
-    # MACD momentum improving (histogram moving in the right direction)
     hist_turning_up = hist > hist.shift(1)
     hist_turning_down = hist < hist.shift(1)
-
     bullish_candle = df["close"] > df["open"]
     bearish_candle = df["close"] < df["open"]
+    vol_ok = df["volume"] > df["mr_volume_sma"] * PATH_C_VOLUME_MULT
 
-    ema_ok_long = (df["close"] > df["mr_ema_200"]) | (df["mr_ema_200_slope"].abs() < 0.001)
-    ema_ok_short = (df["close"] < df["mr_ema_200"]) | (df["mr_ema_200_slope"].abs() < 0.001)
-
-    # ── LONG — 9 conditions ──────────────────────────────────────────
-    long_cond = (
-        (df["regime"] == "RANGING") &                          # L1
-        (df["regime_confidence"] >= 0.5) &                     # L1
-        (df["close"] <= df["mr_bb_lower"] * BB_TOUCH_LONG_MULT) &  # L3: near lower BB
-        (df["mr_rsi"] < RSI_OVERSOLD) &                        # L3: oversold
-        hist_turning_up &                                      # L3: MACD turning
-        (df["volume"] > df["mr_volume_sma"] * VOLUME_MULT) &  # L4: volume
-        bullish_candle &                                       # L4: momentum shift
-        ema_ok_long &                                          # L5: not fighting downtrend
-        True                                                   # L5: cooldown (handled externally)
+    # ── PATH A — BB Bounce (classic mean reversion) ─────────────────
+    # Price at/below lower BB + RSI oversold
+    path_a_long = (
+        (df["close"] <= df["mr_bb_lower"]) &
+        (df["mr_rsi"] < PATH_A_RSI)
+    )
+    path_a_short = (
+        (df["close"] >= df["mr_bb_upper"]) &
+        (df["mr_rsi"] > (100 - PATH_A_RSI))
     )
 
-    # ── SHORT — 9 conditions (mirror) ────────────────────────────────
-    short_cond = (
-        (df["regime"] == "RANGING") &
-        (df["regime_confidence"] >= 0.5) &
-        (df["close"] >= df["mr_bb_upper"] * BB_TOUCH_SHORT_MULT) &
-        (df["mr_rsi"] > RSI_OVERBOUGHT) &
+    # ── PATH B — MACD Reversal (momentum shift near BB) ─────────────
+    # Close within 2% of BB + MACD histogram turning + bullish candle
+    path_b_long = (
+        (df["close"] <= df["mr_bb_lower"] * (1 + PATH_B_BB_PROXIMITY)) &
+        hist_turning_up &
+        bullish_candle
+    )
+    path_b_short = (
+        (df["close"] >= df["mr_bb_upper"] * (1 - PATH_B_BB_PROXIMITY)) &
         hist_turning_down &
-        (df["volume"] > df["mr_volume_sma"] * VOLUME_MULT) &
-        bearish_candle &
-        ema_ok_short &
-        True
+        bearish_candle
     )
+
+    # ── PATH C — RSI Bounce (deep oversold) ─────────────────────────
+    # Deep RSI + bullish candle + volume confirms
+    path_c_long = (
+        (df["mr_rsi"] < PATH_C_RSI) &
+        bullish_candle &
+        vol_ok
+    )
+    path_c_short = (
+        (df["mr_rsi"] > (100 - PATH_C_RSI)) &
+        bearish_candle &
+        vol_ok
+    )
+
+    # ── COMBINE with OR ─────────────────────────────────────────────
+    long_cond = path_a_long | path_b_long | path_c_long
+    short_cond = path_a_short | path_b_short | path_c_short
 
     df["mr_enter_long"] = long_cond.astype(int).fillna(0).astype(int)
     df["mr_enter_short"] = short_cond.astype(int).fillna(0).astype(int)
+
+    # Signal tag for enter_tag routing (priority: A > B > C)
+    df["mr_signal_tag"] = ""
+    df.loc[path_c_long.fillna(False), "mr_signal_tag"] = "mr_rsi_bounce"
+    df.loc[path_b_long.fillna(False), "mr_signal_tag"] = "mr_macd_reversal"
+    df.loc[path_a_long.fillna(False), "mr_signal_tag"] = "mr_bb_bounce"
+    df.loc[path_c_short.fillna(False), "mr_signal_tag"] = "mr_rsi_bounce"
+    df.loc[path_b_short.fillna(False), "mr_signal_tag"] = "mr_macd_reversal"
+    df.loc[path_a_short.fillna(False), "mr_signal_tag"] = "mr_bb_bounce"
+
     return df
 
 

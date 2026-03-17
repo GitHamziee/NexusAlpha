@@ -131,3 +131,41 @@ PAIR_LOCKOUT_LOSSES = 3
 PAIR_LOCKOUT_CANDLES = 16          # 4 hours on 15m
 RISK_ATR_SPIKE_THRESHOLD = 1.5    # ATR > 1.5x SMA → widen stops
 MAX_BALANCE_FRACTION = 0.33        # max 33% of balance per trade
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TREND FOLLOWING — OR SIGNAL PATHS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Path A: Supertrend Breakout
+TF_PATH_A_VOLUME_MULT = 1.0          # volume > sma * this
+
+# Path B: EMA Momentum
+TF_PATH_B_ADX_THRESH = 25            # ADX > this for momentum confirmation
+TF_PATH_B_RSI_LOW = 40               # RSI floor (avoid oversold fakeouts)
+TF_PATH_B_RSI_HIGH = 70              # RSI ceiling (avoid overbought entries)
+
+# Path C: BB Breakout
+TF_PATH_C_ADX_LOOKBACK = 3           # ADX must be higher than N candles ago
+TF_PATH_C_VOLUME_SPIKE = 1.5         # volume > sma * this for breakout
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MEAN REVERSION — OR SIGNAL PATHS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Path A: BB Bounce
+MR_PATH_A_RSI = 35                    # RSI < this for long, > (100-this) for short
+
+# Path B: MACD Reversal
+MR_PATH_B_BB_PROXIMITY = 0.02        # close within 2% of BB lower/upper
+
+# Path C: RSI Bounce
+MR_PATH_C_RSI = 30                    # deep RSI oversold for long
+MR_PATH_C_VOLUME_MULT = 1.0          # volume > sma * this
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REGIME SOFT GATE
+# ═══════════════════════════════════════════════════════════════════════════
+
+REGIME_TRANSITION_CONFIDENCE = 0.35   # was 0.0 — no longer blocks all trades
+REGIME_MTF_PENALTY = 0.85            # was 0.75 — softer disagreement penalty
+CONFIRM_MIN_CONFIDENCE = 0.25         # minimum confidence to allow any trade

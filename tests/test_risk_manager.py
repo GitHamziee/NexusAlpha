@@ -12,6 +12,7 @@ from strategies.risk.risk_manager import (
     check_max_open_trades,
     check_total_drawdown,
     get_leverage,
+    get_regime_adjusted_risk,
     get_risk_percent,
     scale_atr_stop,
 )
@@ -27,8 +28,9 @@ class TestGetRiskPercent:
         assert get_risk_percent(0.7) == MAX_RISK_PER_TRADE / 2  # 0.5%
 
     def test_low_confidence_quarter_risk(self):
-        """0.5 <= confidence < 0.6 → quarter risk (0.25%)."""
+        """0.25 <= confidence < 0.6 → quarter risk (0.25%)."""
         assert get_risk_percent(0.5) == MAX_RISK_PER_TRADE / 4
+        assert get_risk_percent(0.3) == MAX_RISK_PER_TRADE / 4
 
     def test_edge_0_6(self):
         """Exactly 0.6 should allow trading at half risk."""
@@ -43,9 +45,14 @@ class TestGetRiskPercent:
         assert get_risk_percent(0.9, is_funding=True) == FUNDING_RISK_PER_TRADE
         assert get_risk_percent(0.7, is_funding=True) == FUNDING_RISK_PER_TRADE
 
-    def test_funding_allowed_at_0_5(self):
-        """Funding trades allowed at 0.5 confidence (above new 0.5 threshold)."""
-        assert get_risk_percent(0.5, is_funding=True) == FUNDING_RISK_PER_TRADE
+    def test_funding_allowed_at_0_3(self):
+        """Funding trades allowed at 0.3 confidence (above new 0.25 threshold)."""
+        assert get_risk_percent(0.3, is_funding=True) == FUNDING_RISK_PER_TRADE
+
+    def test_below_min_confidence_blocks(self):
+        """Confidence below 0.25 blocks all trades."""
+        assert get_risk_percent(0.2) == 0.0
+        assert get_risk_percent(0.1) == 0.0
 
 
 # ── calculate_position_size ──────────────────────────────────────────────
@@ -155,8 +162,12 @@ class TestCanTrade:
         assert can_trade(**self._defaults()) is True
 
     def test_low_confidence_allowed(self):
-        """0.5 confidence now allowed with quarter risk."""
-        assert can_trade(**self._defaults(regime_confidence=0.5)) is True
+        """0.3 confidence now allowed with quarter risk (above 0.25 floor)."""
+        assert can_trade(**self._defaults(regime_confidence=0.3)) is True
+
+    def test_very_low_confidence_blocks(self):
+        """Confidence below 0.25 blocks trades."""
+        assert can_trade(**self._defaults(regime_confidence=0.2)) is False
 
     def test_max_trades_blocks(self):
         assert can_trade(**self._defaults(open_trade_count=3)) is False
@@ -169,6 +180,45 @@ class TestCanTrade:
 
     def test_funding_trade_allowed(self):
         assert can_trade(**self._defaults(is_funding=True, regime_confidence=0.7)) is True
+
+
+# ── regime-adjusted risk ─────────────────────────────────────────────────
+
+class TestRegimeAdjustedRisk:
+    def test_matching_regime_signal_full_risk(self):
+        """TRENDING + tf signal → full risk."""
+        risk = get_regime_adjusted_risk("TRENDING_BULL", 0.8, "tf")
+        assert risk == MAX_RISK_PER_TRADE
+
+    def test_mismatched_regime_signal_half_risk(self):
+        """RANGING + tf signal → half risk."""
+        risk = get_regime_adjusted_risk("RANGING", 0.8, "tf")
+        assert risk == MAX_RISK_PER_TRADE / 2
+
+    def test_volatile_quarter_risk(self):
+        """VOLATILE → quarter risk regardless of signal type."""
+        risk = get_regime_adjusted_risk("VOLATILE", 0.8, "tf")
+        assert risk == MAX_RISK_PER_TRADE / 4
+
+    def test_transition_half_risk(self):
+        """TRANSITION → half risk (no natural match)."""
+        risk = get_regime_adjusted_risk("TRANSITION", 0.8, "tf")
+        assert risk == MAX_RISK_PER_TRADE / 2
+
+    def test_ranging_mr_full_risk(self):
+        """RANGING + mr signal → full risk (match)."""
+        risk = get_regime_adjusted_risk("RANGING", 0.8, "mr")
+        assert risk == MAX_RISK_PER_TRADE
+
+    def test_below_min_confidence_blocks(self):
+        """Confidence below 0.25 → 0 risk."""
+        risk = get_regime_adjusted_risk("TRENDING_BULL", 0.2, "tf")
+        assert risk == 0.0
+
+    def test_funding_always_fixed(self):
+        """Funding trades always return fixed rate."""
+        risk = get_regime_adjusted_risk("TRENDING_BULL", 0.8, "fr", is_funding=True)
+        assert risk == FUNDING_RISK_PER_TRADE
 
 
 # ── leverage ─────────────────────────────────────────────────────────────

@@ -50,6 +50,7 @@ from strategies.risk.risk_manager import (
     calculate_position_size,
     can_trade,
     check_daily_drawdown,
+    get_regime_adjusted_risk,
     get_risk_percent,
     scale_atr_stop,
 )
@@ -89,16 +90,17 @@ def _run_full_pipeline(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Test 1: TRANSITION regime = zero trades ──────────────────────────────
 
-class TestTransitionNoTrades:
-    def test_transition_regime_blocks_all_entries(self):
-        """When regime is TRANSITION, all three strategies should produce zero signals."""
+class TestTransitionSoftGate:
+    def test_transition_signals_can_fire(self):
+        """With soft gating, sub-strategies CAN fire signals in TRANSITION regime.
+        The regime gate is now in confirm_trade_entry (sizing), not in signal generation."""
         df = _make_ohlcv(300, noise=100, seed=99)
         df = add_regime_indicators(df)
         df = apply_regime(df)
 
-        # Force all rows to TRANSITION
+        # Force all rows to TRANSITION with low confidence
         df["regime"] = TRANSITION
-        df["regime_confidence"] = 0.0
+        df["regime_confidence"] = 0.35
 
         df = add_trend_indicators(df)
         df = add_mr_indicators(df)
@@ -107,21 +109,24 @@ class TestTransitionNoTrades:
         df = populate_mr_entries(df)
         df = populate_funding_entries(df)
 
-        assert df["tf_enter_long"].sum() == 0
-        assert df["tf_enter_short"].sum() == 0
-        assert df["mr_enter_long"].sum() == 0
-        assert df["mr_enter_short"].sum() == 0
-        # Funding doesn't check regime confidence directly for entry,
-        # but it checks regime != VOLATILE. With TRANSITION regime and
-        # NaN funding data, it should produce zero signals anyway.
+        # Signals CAN fire (regime is no longer checked in sub-strategy entries)
+        # We just verify no crash and columns exist
+        assert "tf_enter_long" in df.columns
+        assert "mr_enter_long" in df.columns
+        assert "fr_enter_long" in df.columns
+        # Funding still won't fire (NaN funding data), but TF/MR might
         assert df["fr_enter_long"].sum() == 0
-        assert df["fr_enter_short"].sum() == 0
 
-    def test_transition_confidence_zero_blocks_risk(self):
-        """Risk manager should block trades when confidence = 0."""
-        risk = get_risk_percent(0.0)
+    def test_very_low_confidence_blocks_risk(self):
+        """Risk manager blocks trades when confidence below 0.25."""
+        risk = get_risk_percent(0.2)
         assert risk == 0.0
-        assert can_trade(0.0, 0, 10000, 10000, 10000) is False
+        assert can_trade(0.2, 0, 10000, 10000, 10000) is False
+
+    def test_transition_confidence_allows_risk(self):
+        """Transition confidence (0.35) is above floor (0.25), allows trading."""
+        risk = get_risk_percent(0.35)
+        assert risk > 0.0
 
 
 # ── Test 2: Full pipeline end-to-end ─────────────────────────────────────
@@ -219,7 +224,7 @@ class TestConfidenceScaling:
         assert size == pytest.approx(2500.0)
 
     def test_low_confidence_zero_size(self):
-        risk = get_risk_percent(0.4)
+        risk = get_risk_percent(0.2)  # below 0.25 floor
         assert risk == 0.0
         size = calculate_position_size(10000, risk, 0.02)
         assert size == 0.0
@@ -263,21 +268,21 @@ class TestConfidenceScaling:
 # ── Test 5: Multi-TF confirmation integration ───────────────────────────
 
 class TestMultiTFIntegration:
-    def test_1h_volatile_kills_all_signals(self):
+    def test_1h_volatile_overrides(self):
         """If 1H says VOLATILE, even a strong 15m trend should be overridden."""
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.9, VOLATILE, 0.3)
         assert regime == VOLATILE
         assert conf == 0.3
-        # VOLATILE with conf 0.3 < 0.6 → no trend following trades
+        # VOLATILE with conf 0.3 >= 0.25 → allowed but at quarter risk
         risk = get_risk_percent(conf)
-        assert risk == 0.0
+        assert risk == pytest.approx(0.0025)  # quarter risk
 
     def test_disagreement_reduces_confidence(self):
-        """15m trending + 1H ranging → confidence reduced by 25%."""
+        """15m trending + 1H ranging → confidence reduced by 15%."""
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.7, RANGING, 0.6)
-        assert conf == pytest.approx(0.525)
+        assert conf == pytest.approx(0.595)  # 0.7 * 0.85
         risk = get_risk_percent(conf)
-        assert risk == pytest.approx(0.0025)  # 0.5 <= 0.525 < 0.6 → quarter risk
+        assert risk == pytest.approx(0.0025)  # 0.25 <= 0.595 < 0.6 → quarter risk
 
     def test_agreement_preserves_confidence(self):
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.8, TRENDING_BULL, 0.7)

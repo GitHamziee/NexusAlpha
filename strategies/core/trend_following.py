@@ -1,11 +1,14 @@
 """
-Trend Following Strategy — catches the middle of established trends.
+Trend Following Strategy — catches established trends via 3 independent paths.
 
-Active when: Regime = TRENDING_BULL or TRENDING_BEAR, confidence >= 0.6.
-Enters on confirmed pullbacks within trends.  9 conditions must ALL be true
-simultaneously — that extreme selectivity is why 65-75% of these trades win.
+Uses OR-of-simple-groups pattern: any ONE signal path can trigger an entry.
+Each path has only 2-3 conditions (vs. the old 9-condition AND approach).
 
-All functions take a DataFrame and return it with signal columns added.
+Path A — Supertrend Breakout: ST flips bullish + close > EMA50 + volume
+Path B — EMA Momentum: EMA9 > EMA50 + ADX strong + RSI in range
+Path C — BB Breakout: close > BB upper + ADX rising + volume spike
+
+Regime is a soft gate (affects sizing in NexusAlpha.py, not signal blocking).
 """
 
 from __future__ import annotations
@@ -19,27 +22,28 @@ import pandas_ta as ta
 from .thresholds import (
     ADX_PERIOD,
     ATR_PERIOD,
+    BB_PERIOD,
+    BB_STD,
     RSI_PERIOD,
     STOCHRSI_RSI_PERIOD,
     STOCHRSI_SMOOTH,
     STOCHRSI_STOCH_PERIOD,
     SUPERTREND_MULT,
     SUPERTREND_PERIOD,
-    TF_ADX_ENTRY_THRESH as ADX_ENTRY_THRESH,
     TF_ADX_DEATH_LEVEL as ADX_DEATH_LEVEL,
-    TF_STOCHRSI_LOOKBACK as STOCHRSI_LOOKBACK,
     TF_EMA_FAST as EMA_FAST,
     TF_EMA_MID as EMA_MID,
     TF_EMA_SLOW as EMA_SLOW,
-    TF_RSI_OB_GUARD as RSI_OB_GUARD,
-    TF_RSI_OS_GUARD as RSI_OS_GUARD,
-    TF_STOCHRSI_OVERBOUGHT as STOCHRSI_OVERBOUGHT,
-    TF_STOCHRSI_OVERSOLD as STOCHRSI_OVERSOLD,
+    TF_PATH_A_VOLUME_MULT as PATH_A_VOLUME_MULT,
+    TF_PATH_B_ADX_THRESH as PATH_B_ADX_THRESH,
+    TF_PATH_B_RSI_HIGH as PATH_B_RSI_HIGH,
+    TF_PATH_B_RSI_LOW as PATH_B_RSI_LOW,
+    TF_PATH_C_ADX_LOOKBACK as PATH_C_ADX_LOOKBACK,
+    TF_PATH_C_VOLUME_SPIKE as PATH_C_VOLUME_SPIKE,
     TF_STOP_ATR_MULT as STOP_ATR_MULT,
     TF_TIME_STOP_CANDLES as TIME_STOP_CANDLES,
     TF_TP1_ATR_MULT as TP1_ATR_MULT,
     TF_TP2_ATR_MULT as TP2_ATR_MULT,
-    TF_VOLUME_MULT as VOLUME_MULT,
     VOLUME_SMA_PERIOD,
 )
 
@@ -99,65 +103,96 @@ def add_trend_indicators(df: pd.DataFrame) -> pd.DataFrame:
     rsi = ta.rsi(df["close"], length=RSI_PERIOD)
     df["rsi_14"] = rsi if rsi is not None else float("nan")
 
+    # Bollinger Bands (for Path C — BB Breakout)
+    # Reuse regime detector's BB columns if present, otherwise compute
+    if "bb_upper" not in df.columns:
+        bbands = ta.bbands(df["close"], length=BB_PERIOD, std=BB_STD)
+        if bbands is not None and not bbands.empty:
+            bbu_col = [c for c in bbands.columns if c.startswith("BBU_")][0]
+            bbl_col = [c for c in bbands.columns if c.startswith("BBL_")][0]
+            bbm_col = [c for c in bbands.columns if c.startswith("BBM_")][0]
+            df["bb_upper"] = bbands[bbu_col]
+            df["bb_lower"] = bbands[bbl_col]
+            df["bb_middle"] = bbands[bbm_col]
+        else:
+            df["bb_upper"] = float("nan")
+            df["bb_lower"] = float("nan")
+            df["bb_middle"] = float("nan")
+
     return df
 
 
 def populate_trend_entries(df: pd.DataFrame) -> pd.DataFrame:
-    """Add trend following entry signals to the DataFrame.
+    """Add trend following entry signals using 3 OR'd signal paths.
 
-    Adds columns: tf_enter_long, tf_enter_short.
-    All 9 conditions per side must be true simultaneously.
+    Adds columns: tf_enter_long, tf_enter_short, tf_signal_tag.
+    Any ONE path firing is sufficient for an entry signal.
+    Regime is NOT checked here — it's a soft gate handled in NexusAlpha.py.
     """
     if df.empty:
         df["tf_enter_long"] = pd.Series(dtype=int)
         df["tf_enter_short"] = pd.Series(dtype=int)
+        df["tf_signal_tag"] = pd.Series(dtype=str)
         return df
 
-    # Pre-compute reusable conditions
+    # Pre-compute shared conditions
     adx = df["tf_adx"]
-    adx_rising = adx > adx.shift(3)  # ADX > ADX[3]
-    vol_ok = df["volume"] > df["volume_sma_20"] * VOLUME_MULT
+    adx_rising = adx > adx.shift(PATH_C_ADX_LOOKBACK)
+    vol_ok = df["volume"] > df["volume_sma_20"] * PATH_A_VOLUME_MULT
+    vol_spike = df["volume"] > df["volume_sma_20"] * PATH_C_VOLUME_SPIKE
 
-    # StochRSI pullback conditions — "recently in oversold/overbought zone"
-    k = df["stochrsi_k"]
-    d = df["stochrsi_d"]
-    # Was oversold/overbought within last N candles
-    was_oversold = pd.Series(False, index=df.index)
-    was_overbought = pd.Series(False, index=df.index)
-    for i in range(1, STOCHRSI_LOOKBACK + 1):
-        was_oversold = was_oversold | (k.shift(i) < STOCHRSI_OVERSOLD)
-        was_overbought = was_overbought | (k.shift(i) > STOCHRSI_OVERBOUGHT)
-    k_cross_up = (k > d) & was_oversold
-    k_cross_down = (k < d) & was_overbought
+    # ── PATH A — Supertrend Breakout (trend initiation) ─────────────
+    # Supertrend just flipped bullish + above EMA50 + volume confirms
+    st_flip_up = (df["supertrend_direction"] == 1) & (df["supertrend_direction"].shift(1) == -1)
+    st_flip_down = (df["supertrend_direction"] == -1) & (df["supertrend_direction"].shift(1) == 1)
 
-    # ── LONG — 9 conditions ──────────────────────────────────────────
-    long_cond = (
-        (df["regime"] == "TRENDING_BULL") &              # L1: regime
-        (df["regime_confidence"] >= 0.5) &               # L1: confidence
-        (df["supertrend_direction"] == 1) &              # L3: Supertrend bullish
-        (adx > ADX_ENTRY_THRESH) &                       # L3: ADX strong
-        adx_rising &                                     # L3: ADX rising
-        (df["close"] > df["ema_200"]) &                  # L3: above major trend
-        k_cross_up &                                     # L4: StochRSI pullback entry
-        vol_ok &                                         # L4: volume confirmation
-        (df["rsi_14"] < RSI_OB_GUARD)                    # L5: not overbought
+    path_a_long = st_flip_up & (df["close"] > df["ema_50"]) & vol_ok
+    path_a_short = st_flip_down & (df["close"] < df["ema_50"]) & vol_ok
+
+    # ── PATH B — EMA Momentum (trend continuation) ──────────────────
+    # EMA9 above EMA50 + ADX strong + RSI in healthy range
+    path_b_long = (
+        (df["ema_9"] > df["ema_50"]) &
+        (adx > PATH_B_ADX_THRESH) &
+        (df["rsi_14"] > PATH_B_RSI_LOW) &
+        (df["rsi_14"] < PATH_B_RSI_HIGH)
+    )
+    path_b_short = (
+        (df["ema_9"] < df["ema_50"]) &
+        (adx > PATH_B_ADX_THRESH) &
+        (df["rsi_14"] > (100 - PATH_B_RSI_HIGH)) &
+        (df["rsi_14"] < (100 - PATH_B_RSI_LOW))
     )
 
-    # ── SHORT — 8 conditions (mirror) ────────────────────────────────
-    short_cond = (
-        (df["regime"] == "TRENDING_BEAR") &
-        (df["regime_confidence"] >= 0.5) &
-        (df["supertrend_direction"] == -1) &
-        (adx > ADX_ENTRY_THRESH) &
+    # ── PATH C — BB Breakout (volatility expansion) ─────────────────
+    # Price breaks above/below BB + ADX rising + volume spike
+    path_c_long = (
+        (df["close"] > df["bb_upper"]) &
         adx_rising &
-        (df["close"] < df["ema_200"]) &
-        k_cross_down &
-        vol_ok &
-        (df["rsi_14"] > RSI_OS_GUARD)
+        vol_spike
     )
+    path_c_short = (
+        (df["close"] < df["bb_lower"]) &
+        adx_rising &
+        vol_spike
+    )
+
+    # ── COMBINE with OR ─────────────────────────────────────────────
+    long_cond = path_a_long | path_b_long | path_c_long
+    short_cond = path_a_short | path_b_short | path_c_short
 
     df["tf_enter_long"] = long_cond.astype(int).fillna(0).astype(int)
     df["tf_enter_short"] = short_cond.astype(int).fillna(0).astype(int)
+
+    # Signal tag for enter_tag routing (priority: A > C > B)
+    df["tf_signal_tag"] = ""
+    df.loc[path_b_long.fillna(False), "tf_signal_tag"] = "tf_ema_momentum"
+    df.loc[path_c_long.fillna(False), "tf_signal_tag"] = "tf_bb_breakout"
+    df.loc[path_a_long.fillna(False), "tf_signal_tag"] = "tf_supertrend"
+    df.loc[path_b_short.fillna(False), "tf_signal_tag"] = "tf_ema_momentum"
+    df.loc[path_c_short.fillna(False), "tf_signal_tag"] = "tf_bb_breakout"
+    df.loc[path_a_short.fillna(False), "tf_signal_tag"] = "tf_supertrend"
+
     return df
 
 
@@ -165,7 +200,7 @@ def populate_trend_exits(df: pd.DataFrame) -> pd.DataFrame:
     """Add trend following exit signals.
 
     Adds columns: tf_exit_long, tf_exit_short.
-    Exit triggers: ADX death (< 18) or time stop (20 candles tracked externally).
+    Exit triggers: ADX death (< 18), Supertrend flip, or BB middle reversion.
     ATR-based stop/TP are handled in custom_stoploss and confirm_trade_exit.
     """
     if df.empty:
