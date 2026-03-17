@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 # ── Signal logging ───────────────────────────────────────────────────────
 SIGNAL_LOG_DIR = Path("logs/signals")
 TRADE_LOG_DIR = Path("logs/trades")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SIGNAL_COLUMNS = [
     "timestamp", "schema_version",
     "rsi_14", "macd_histogram", "bb_percent_b", "adx_14",
@@ -98,6 +98,11 @@ TRADE_COLUMNS = [
     "atr_at_entry", "atr_at_exit",
     "rsi_at_entry", "rsi_at_exit",
     "adx_at_entry", "adx_at_exit",
+    # v2: detailed trade analysis fields
+    "stop_price", "tp1_price", "tp2_price",
+    "peak_rate", "trough_rate", "mfe_pct", "mae_pct",
+    "supertrend_at_entry", "ema50_at_entry", "bb_middle_at_entry",
+    "supertrend_at_exit", "ema50_at_exit", "bb_middle_at_exit",
     "schema_version",
 ]
 
@@ -331,6 +336,13 @@ class NexusAlpha(IStrategy):
         if entry_rate <= 0:
             return self.stoploss
 
+        # Track peak/trough for MFE/MAE logging
+        if not hasattr(trade, "_peak_rate"):
+            trade._peak_rate = current_rate
+            trade._trough_rate = current_rate
+        trade._peak_rate = max(trade._peak_rate, current_rate)
+        trade._trough_rate = min(trade._trough_rate, current_rate)
+
         tag = trade.enter_tag or ""
         cfg = get_pair_config(pair)
 
@@ -457,6 +469,9 @@ class NexusAlpha(IStrategy):
             "atr": last.get("atr_14", None),
             "rsi": last.get("rsi_14", None),
             "adx": last.get("adx_14", None),
+            "supertrend": last.get("supertrend_value", None),
+            "ema50": last.get("ema_50", None),
+            "bb_middle": last.get("bb_middle", None),
         }
 
         return True
@@ -481,6 +496,40 @@ class NexusAlpha(IStrategy):
                 trade._atr_at_entry = ctx.get("atr")
                 trade._rsi_at_entry = ctx.get("rsi")
                 trade._adx_at_entry = ctx.get("adx")
+                trade._supertrend_at_entry = ctx.get("supertrend")
+                trade._ema50_at_entry = ctx.get("ema50")
+                trade._bb_middle_at_entry = ctx.get("bb_middle")
+
+                # Compute absolute SL/TP prices from entry ATR
+                entry_atr = ctx.get("atr") or 0
+                tag = trade.enter_tag or ""
+                cfg = get_pair_config(pair)
+                if "trend_following" in tag:
+                    sl_mult = cfg["tf_stop_atr_mult"]
+                    tp1_mult = cfg["tf_tp1_atr_mult"]
+                    tp2_mult = cfg["tf_tp2_atr_mult"]
+                elif "mean_reversion" in tag:
+                    sl_mult = cfg["mr_stop_atr_mult"]
+                    tp1_mult = tp2_mult = 0
+                else:
+                    sl_mult = FR_STOP_ATR_MULT
+                    tp1_mult = tp2_mult = 0
+
+                stop_dist = sl_mult * entry_atr
+                is_short = "short" in tag
+                if is_short:
+                    trade._stop_price = trade.open_rate + stop_dist
+                    trade._tp1_price = trade.open_rate - tp1_mult * entry_atr if tp1_mult else None
+                    trade._tp2_price = trade.open_rate - tp2_mult * entry_atr if tp2_mult else None
+                else:
+                    trade._stop_price = trade.open_rate - stop_dist
+                    trade._tp1_price = trade.open_rate + tp1_mult * entry_atr if tp1_mult else None
+                    trade._tp2_price = trade.open_rate + tp2_mult * entry_atr if tp2_mult else None
+
+                # Initialize peak/trough tracking
+                trade._peak_rate = trade.open_rate
+                trade._trough_rate = trade.open_rate
+
                 self._pending_entry_context = {}
 
     # ─── confirm_trade_exit (Trade Journal) ──────────────────────────────
@@ -673,8 +722,20 @@ class NexusAlpha(IStrategy):
 
             duration = (current_time - trade.open_date).total_seconds() / 60
             profit_ratio = (close_rate - trade.open_rate) / trade.open_rate
-            if trade.enter_tag and "short" in trade.enter_tag:
+            is_short = trade.enter_tag and "short" in trade.enter_tag
+            if is_short:
                 profit_ratio = -profit_ratio
+
+            # Compute MFE (max favorable excursion) and MAE (max adverse excursion)
+            entry = trade.open_rate
+            peak = getattr(trade, "_peak_rate", entry)
+            trough = getattr(trade, "_trough_rate", entry)
+            if is_short:
+                mfe = (entry - trough) / entry if entry > 0 else 0
+                mae = (peak - entry) / entry if entry > 0 else 0
+            else:
+                mfe = (peak - entry) / entry if entry > 0 else 0
+                mae = (entry - trough) / entry if entry > 0 else 0
 
             record = {
                 "trade_id": trade.id,
@@ -701,6 +762,20 @@ class NexusAlpha(IStrategy):
                 "rsi_at_exit": last_row.get("rsi_14", None),
                 "adx_at_entry": getattr(trade, "_adx_at_entry", None),
                 "adx_at_exit": last_row.get("adx_14", None),
+                # v2: detailed trade analysis
+                "stop_price": getattr(trade, "_stop_price", None),
+                "tp1_price": getattr(trade, "_tp1_price", None),
+                "tp2_price": getattr(trade, "_tp2_price", None),
+                "peak_rate": getattr(trade, "_peak_rate", None),
+                "trough_rate": getattr(trade, "_trough_rate", None),
+                "mfe_pct": round(mfe, 4),
+                "mae_pct": round(mae, 4),
+                "supertrend_at_entry": getattr(trade, "_supertrend_at_entry", None),
+                "ema50_at_entry": getattr(trade, "_ema50_at_entry", None),
+                "bb_middle_at_entry": getattr(trade, "_bb_middle_at_entry", None),
+                "supertrend_at_exit": last_row.get("supertrend_value", None),
+                "ema50_at_exit": last_row.get("ema_50", None),
+                "bb_middle_at_exit": last_row.get("bb_middle", None),
                 "schema_version": SCHEMA_VERSION,
             }
 
@@ -711,9 +786,15 @@ class NexusAlpha(IStrategy):
                 writer.writerow(record)
 
             logger.info(
-                "Trade closed: %s %s | %.2f%% | %s | %s",
+                "Trade closed: %s %s | %.2f%% | %s | SL=%.1f TP1=%s TP2=%s | peak=%.1f trough=%.1f | MFE=%.2f%% MAE=%.2f%%",
                 record["strategy"], record["side"],
-                profit_ratio * 100, exit_reason, record["duration_minutes"],
+                profit_ratio * 100, exit_reason,
+                record["stop_price"] or 0,
+                record["tp1_price"] or "N/A",
+                record["tp2_price"] or "N/A",
+                record["peak_rate"] or 0,
+                record["trough_rate"] or 0,
+                mfe * 100, mae * 100,
             )
 
         except Exception as e:
