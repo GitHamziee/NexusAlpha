@@ -153,7 +153,7 @@ TF_PATH_C_VOLUME_SPIKE = 1.3         # volume > sma * this for breakout (loosene
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Path A: BB Bounce
-MR_PATH_A_RSI = 35                    # RSI < this for long, > (100-this) for short
+MR_PATH_A_RSI = 28                    # RSI < this for long, > (100-this) for short (tightened from 35)
 
 # Path B: MACD Reversal
 MR_PATH_B_BB_PROXIMITY = 0.01        # close within 1% of BB lower/upper (tightened from 2%)

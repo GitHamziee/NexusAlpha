@@ -117,26 +117,12 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
         (df["mr_rsi"] > (100 - PATH_A_RSI))
     )
 
-    # ── PATH B — MACD Reversal (momentum shift near BB) ─────────────
-    # Close within 1% of BB + MACD negative & turning + RSI filter + bullish candle
-    hist_negative = df["mr_macd_hist"] < 0
-    hist_positive = df["mr_macd_hist"] > 0
-    rsi_oversold_filter = df["mr_rsi"] < PATH_B_RSI_FILTER
-    rsi_overbought_filter = df["mr_rsi"] > (100 - PATH_B_RSI_FILTER)
-    path_b_long = (
-        (df["close"] <= df["mr_bb_lower"] * (1 + PATH_B_BB_PROXIMITY)) &
-        hist_negative &
-        hist_turning_up &
-        rsi_oversold_filter &
-        bullish_candle
-    )
-    path_b_short = (
-        (df["close"] >= df["mr_bb_upper"] * (1 - PATH_B_BB_PROXIMITY)) &
-        hist_positive &
-        hist_turning_down &
-        rsi_overbought_filter &
-        bearish_candle
-    )
+    # ── PATH B — MACD Reversal — DISABLED ────────────────────────────
+    # Backtesting showed this path fires ~900 times in 273 days on BTC 15m
+    # with negative expectancy. The MACD histogram oscillates too frequently
+    # near BB on 15m timeframe, producing noise not signal.
+    path_b_long = pd.Series(False, index=df.index)
+    path_b_short = pd.Series(False, index=df.index)
 
     # ── PATH C — RSI Bounce (deep oversold) ─────────────────────────
     # Deep RSI + bullish candle + volume confirms

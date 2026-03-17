@@ -43,33 +43,33 @@ class TestAddMRIndicators:
 
 class TestPopulateMREntries:
     def test_path_a_bb_bounce_long(self):
-        """Path A: Close <= BB lower + RSI < 35."""
+        """Path A: Close <= BB lower + RSI < 28."""
         n = 3
         df = pd.DataFrame({
             "close": [49600, 49500, 49400],  # at/below BB lower
-            "open": [49700, 49600, 49500],   # bearish (won't trigger Path B/C)
+            "open": [49700, 49600, 49500],
             "mr_bb_lower": [49600] * n,
             "mr_bb_upper": [50400] * n,
             "mr_bb_middle": [50000] * n,
-            "mr_rsi": [40, 34, 30],  # < 35 at idx 1,2
-            "mr_macd_hist": [-50, -50, -50],  # not turning up
+            "mr_rsi": [30, 27, 25],  # < 28 at idx 1,2
+            "mr_macd_hist": [-50, -50, -50],
             "volume": [300, 300, 300],
-            "mr_volume_sma": [400] * n,  # low volume
+            "mr_volume_sma": [400] * n,
         })
         df = populate_mr_entries(df)
         assert df.loc[1, "mr_enter_long"] == 1
         assert df.loc[1, "mr_signal_tag"] == "mr_bb_bounce"
 
     def test_path_a_bb_bounce_short(self):
-        """Path A short: Close >= BB upper + RSI > 65."""
+        """Path A short: Close >= BB upper + RSI > 72."""
         n = 3
         df = pd.DataFrame({
             "close": [50400, 50500, 50600],
-            "open": [50300, 50400, 50700],  # bullish at idx 0,1 → won't fire Path C
+            "open": [50300, 50400, 50700],
             "mr_bb_lower": [49600] * n,
             "mr_bb_upper": [50400] * n,
             "mr_bb_middle": [50000] * n,
-            "mr_rsi": [60, 66, 70],  # > 65 at idx 1,2
+            "mr_rsi": [70, 73, 75],  # > 72 at idx 1,2
             "mr_macd_hist": [50, 50, 50],
             "volume": [300, 300, 300],
             "mr_volume_sma": [400] * n,
@@ -78,54 +78,18 @@ class TestPopulateMREntries:
         assert df.loc[1, "mr_enter_short"] == 1
         assert df.loc[1, "mr_signal_tag"] == "mr_bb_bounce"
 
-    def test_path_b_macd_reversal_long(self):
-        """Path B: Close within 1% of BB lower + MACD negative & turning up + RSI < 45 + bullish candle."""
+    def test_path_b_disabled(self):
+        """Path B (MACD Reversal) is disabled — should never fire."""
         n = 5
         df = pd.DataFrame({
-            "close": [49800, 49700, 49600, 49500, 49700],  # idx 4 is bullish
-            "open": [49850, 49750, 49650, 49550, 49500],   # close > open at idx 4
-            "mr_bb_lower": [49300] * n,  # 49700 <= 49300 * 1.01 = 49793 → within 1%
-            "mr_bb_upper": [51000] * n,
-            "mr_bb_middle": [50000] * n,
-            "mr_rsi": [42, 42, 42, 42, 42],  # < 45 (RSI filter), > 35 (Path A won't fire)
-            "mr_macd_hist": [-50, -40, -30, -20, -10],  # negative AND turning up
-            "volume": [300, 300, 300, 300, 300],
-            "mr_volume_sma": [400] * n,
-        })
-        df = populate_mr_entries(df)
-        assert df.loc[4, "mr_enter_long"] == 1
-        assert df.loc[4, "mr_signal_tag"] == "mr_macd_reversal"
-
-    def test_path_b_positive_hist_no_signal(self):
-        """Path B should NOT fire when MACD histogram is positive."""
-        n = 3
-        df = pd.DataFrame({
-            "close": [49700, 49700, 49700],
-            "open": [49800, 49800, 49600],   # bullish at idx 2
-            "mr_bb_lower": [49300] * n,       # within 1%
-            "mr_bb_upper": [51000] * n,
-            "mr_bb_middle": [50000] * n,
-            "mr_rsi": [42, 42, 42],           # < 45
-            "mr_macd_hist": [10, 20, 30],     # positive — should NOT fire
-            "volume": [300, 300, 300],
-            "mr_volume_sma": [400] * n,
-        })
-        df = populate_mr_entries(df)
-        path_b_fired = (df["mr_signal_tag"] == "mr_macd_reversal").any()
-        assert not path_b_fired
-
-    def test_path_b_high_rsi_no_signal(self):
-        """Path B should NOT fire when RSI >= 45 (not oversold enough)."""
-        n = 3
-        df = pd.DataFrame({
-            "close": [49700, 49700, 49700],
-            "open": [49800, 49800, 49600],
+            "close": [49800, 49700, 49600, 49500, 49700],
+            "open": [49850, 49750, 49650, 49550, 49500],
             "mr_bb_lower": [49300] * n,
             "mr_bb_upper": [51000] * n,
             "mr_bb_middle": [50000] * n,
-            "mr_rsi": [50, 50, 50],          # >= 45 — should block
-            "mr_macd_hist": [-50, -40, -30],  # negative and turning up
-            "volume": [300, 300, 300],
+            "mr_rsi": [40, 40, 40, 40, 40],  # > 28 so Path A won't fire
+            "mr_macd_hist": [-50, -40, -30, -20, -10],
+            "volume": [300, 300, 300, 300, 300],
             "mr_volume_sma": [400] * n,
         })
         df = populate_mr_entries(df)
@@ -152,7 +116,7 @@ class TestPopulateMREntries:
 
     def test_or_logic_any_path_fires(self):
         """Any single path firing should produce a long signal."""
-        # Path A setup: close at BB lower + RSI < 35
+        # Path A setup: close at BB lower + RSI < 28
         n = 3
         df = pd.DataFrame({
             "close": [49600, 49500, 49400],
@@ -160,7 +124,7 @@ class TestPopulateMREntries:
             "mr_bb_lower": [49600] * n,
             "mr_bb_upper": [50400] * n,
             "mr_bb_middle": [50000] * n,
-            "mr_rsi": [40, 33, 28],
+            "mr_rsi": [30, 27, 25],
             "mr_macd_hist": [-50, -50, -50],
             "volume": [300, 300, 300],
             "mr_volume_sma": [400] * n,
