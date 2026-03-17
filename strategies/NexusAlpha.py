@@ -4,11 +4,12 @@ NexusAlpha — Regime-Adaptive Crypto Trading Strategy
 Main Freqtrade IStrategy orchestrating:
 1. Regime detection (5 regimes with adaptive thresholds)
 2. Strategy selection (trend following / mean reversion / funding rate)
-3. Signal generation with 5-layer confluence filtering
+3. Signal generation with tiered confluence filtering
 4. Risk management (position sizing, circuit breakers, ATR stop scaling)
 
-Target: 70-80% win rate through extreme selectivity (200 signals → ~13 trades/month).
-ML enhancement planned for Phase 2 after 3+ months of live data.
+Architecture: 3 hard gates + N-of-M confluence scoring per strategy.
+Per-pair parameters for BTC, ETH, SOL.
+Target: 55-63% win rate, 20-35 trades/month per pair.
 """
 
 import csv
@@ -34,14 +35,11 @@ from freqtrade.strategy import (
 )
 
 from core.funding_rate import (
-    STOP_ATR_MULT as FR_STOP_ATR_MULT,
     add_funding_indicators,
     populate_funding_entries,
     populate_funding_exits,
 )
 from core.mean_reversion import (
-    STOP_ATR_MULT as MR_STOP_ATR_MULT,
-    TIME_STOP_CANDLES as MR_TIME_STOP,
     add_mr_indicators,
     populate_mr_entries,
     populate_mr_exits,
@@ -52,13 +50,16 @@ from core.regime_detector import (
     apply_regime,
 )
 from core.trend_following import (
-    STOP_ATR_MULT as TF_STOP_ATR_MULT,
-    TIME_STOP_CANDLES as TF_TIME_STOP,
     add_trend_indicators,
     populate_trend_entries,
     populate_trend_exits,
 )
-from core.thresholds import CONFIRM_MIN_CONFIDENCE, TF_TP1_ATR_MULT, TF_TP2_ATR_MULT
+from core.thresholds import (
+    CONFIRM_MIN_CONFIDENCE,
+    FR_STOP_ATR_MULT,
+    MAX_OPEN_TRADES,
+    get_pair_config,
+)
 from risk.risk_manager import (
     calculate_position_size,
     get_regime_adjusted_risk,
@@ -103,10 +104,10 @@ TRADE_COLUMNS = [
 
 class NexusAlpha(IStrategy):
     """
-    Regime-adaptive strategy using 9-AND confluence filtering.
+    Regime-adaptive strategy using tiered confluence filtering.
 
-    Each sub-strategy requires ALL conditions to be simultaneously true.
-    Regime is a hard gate: confidence < 0.6 = NO TRADE.
+    Each sub-strategy uses hard gates + scoring for balanced selectivity.
+    Per-pair parameters for BTC, ETH, SOL.
     """
 
     # ─── Freqtrade Configuration ───────────────────────────────────────
@@ -116,7 +117,7 @@ class NexusAlpha(IStrategy):
     informative_timeframes = ["1h"]
     can_short = True
     minimal_roi = {"0": 100}
-    stoploss = -0.05
+    stoploss = -0.08                     # widened fallback for SOL
     trailing_stop = False
     use_custom_stoploss = True
     process_only_new_candles = True
@@ -136,9 +137,7 @@ class NexusAlpha(IStrategy):
     mr_rsi_oversold = IntParameter(25, 35, default=30, space="buy")
     mr_rsi_overbought = IntParameter(65, 75, default=70, space="buy")
     mr_volume_mult = DecimalParameter(1.0, 1.5, default=1.2, space="buy")
-    tf_adx_threshold = IntParameter(22, 30, default=25, space="buy")
-    tf_stochrsi_low = IntParameter(15, 25, default=20, space="buy")
-    tf_stochrsi_high = IntParameter(75, 85, default=80, space="buy")
+    tf_adx_threshold = IntParameter(18, 28, default=22, space="buy")
 
     # ─── Circuit Breaker Protections ───────────────────────────────────
 
@@ -165,30 +164,31 @@ class NexusAlpha(IStrategy):
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """Compute ALL indicators, run regime detector, merge 1H data."""
 
+        pair = metadata["pair"]
+
         # 1) Regime indicators (ADX, BB, EMA slope, ATR) + classify
         dataframe = add_regime_indicators(dataframe)
         dataframe = apply_regime(dataframe)
 
-        # 2) Trend following indicators
-        dataframe = add_trend_indicators(dataframe)
+        # 2) Trend following indicators (per-pair Supertrend settings)
+        dataframe = add_trend_indicators(dataframe, pair=pair)
 
-        # 3) Mean reversion indicators
-        dataframe = add_mr_indicators(dataframe)
+        # 3) Mean reversion indicators (per-pair BB std)
+        dataframe = add_mr_indicators(dataframe, pair=pair)
 
         # 4) Funding rate indicators (funding_rate column injected by bot_loop_start)
         dataframe = add_funding_indicators(dataframe)
 
         # 5) Merge 1H informative data for multi-TF confirmation
         if self.dp:
-            for pair in self.dp.current_whitelist():
-                inf_df = self.dp.get_pair_dataframe(pair=pair, timeframe="1h")
-                if not inf_df.empty:
-                    inf_df = add_regime_indicators(inf_df)
-                    inf_df = apply_regime(inf_df)
-                    dataframe = merge_informative_pair(
-                        dataframe, inf_df, self.timeframe, "1h",
-                        ffill=True,
-                    )
+            inf_df = self.dp.get_pair_dataframe(pair=pair, timeframe="1h")
+            if not inf_df.empty:
+                inf_df = add_regime_indicators(inf_df)
+                inf_df = apply_regime(inf_df)
+                dataframe = merge_informative_pair(
+                    dataframe, inf_df, self.timeframe, "1h",
+                    ffill=True,
+                )
 
         # 6) Apply multi-TF regime confirmation (adjusts regime + confidence)
         dataframe = apply_multitf_confirmation(dataframe)
@@ -209,13 +209,15 @@ class NexusAlpha(IStrategy):
     def populate_entry_trend(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """Run all strategy entries, merge with priority, tag with signal path."""
 
+        pair = metadata["pair"]
+
         dataframe.loc[:, "enter_long"] = 0
         dataframe.loc[:, "enter_short"] = 0
         dataframe.loc[:, "enter_tag"] = ""
 
         # Strategy entry signals (regime hard-gate in confirm_trade_entry)
-        dataframe = populate_trend_entries(dataframe)
-        dataframe = populate_mr_entries(dataframe)
+        dataframe = populate_trend_entries(dataframe, pair=pair)
+        dataframe = populate_mr_entries(dataframe, pair=pair)
         dataframe = populate_funding_entries(dataframe)
 
         # Merge signals — priority: TF > MR > FR
@@ -286,14 +288,15 @@ class NexusAlpha(IStrategy):
 
     # ─── stop multiplier helper ─────────────────────────────────────────
 
-    def _get_base_stop_mult(self, tag: str) -> float:
-        """Return base ATR stop multiplier for a given signal tag."""
+    def _get_base_stop_mult(self, tag: str, pair: str) -> float:
+        """Return base ATR stop multiplier for a given signal tag and pair."""
+        cfg = get_pair_config(pair)
         if "trend_following" in tag:
-            return TF_STOP_ATR_MULT    # 2.0
+            return cfg["tf_stop_atr_mult"]
         elif "mean_reversion" in tag:
-            return MR_STOP_ATR_MULT    # 1.5
+            return cfg["mr_stop_atr_mult"]
         elif "funding_rate" in tag:
-            return FR_STOP_ATR_MULT    # 3.0
+            return FR_STOP_ATR_MULT
         return 2.0
 
     # ─── custom_stoploss ───────────────────────────────────────────────
@@ -323,16 +326,19 @@ class NexusAlpha(IStrategy):
             return -0.03
 
         tag = trade.enter_tag or ""
+        cfg = get_pair_config(pair)
 
-        # Base multiplier per signal path
-        base_mult = self._get_base_stop_mult(tag)
+        # Base multiplier per signal path + pair
+        base_mult = self._get_base_stop_mult(tag, pair)
 
         # Dynamic scaling: widen stop when vol spikes
         scaled_mult = scale_atr_stop(base_mult, atr, atr_sma)
 
-        # ── TP-based trailing ────────────────────────────────────────
-        tp1_pct = TF_TP1_ATR_MULT * atr / entry_rate
-        tp2_pct = TF_TP2_ATR_MULT * atr / entry_rate
+        # ── TP-based trailing (per-pair TP levels) ─────────────────────
+        tp1_mult = cfg["tf_tp1_atr_mult"] if "trend_following" in tag else cfg["tf_tp1_atr_mult"]
+        tp2_mult = cfg["tf_tp2_atr_mult"] if "trend_following" in tag else cfg["tf_tp2_atr_mult"]
+        tp1_pct = tp1_mult * atr / entry_rate
+        tp2_pct = tp2_mult * atr / entry_rate
 
         if current_profit >= tp2_pct:
             # Lock in 80% of TP1-level gains
@@ -343,21 +349,23 @@ class NexusAlpha(IStrategy):
             # Move stop to breakeven
             return (1.001 / (1 + current_profit)) - 1
 
-        # ── Time stop: force close if trade has stalled ──────────────
+        # ── Time stop: force close if trade has stalled ────────────────
         trade_candles = (current_time - trade.open_date).total_seconds() / 900
         is_tf = "trend_following" in tag
         is_mr = "mean_reversion" in tag
-        if is_tf and trade_candles > TF_TIME_STOP and current_profit < 0.005:
+        tf_time_stop = cfg["tf_time_stop"]
+        mr_time_stop = cfg["mr_time_stop"]
+        if is_tf and trade_candles > tf_time_stop and current_profit < 0.005:
             return -0.001
-        if is_mr and trade_candles > MR_TIME_STOP and current_profit < 0.005:
+        if is_mr and trade_candles > mr_time_stop and current_profit < 0.005:
             return -0.001
 
-        # ── Normal ATR-based stop ────────────────────────────────────
+        # ── Normal ATR-based stop ──────────────────────────────────────
         stop_distance = scaled_mult * atr
         stop_pct = -(stop_distance / entry_rate)
 
-        # Clamp: never wider than -5%
-        return max(stop_pct, -0.05)
+        # Clamp: per-pair max stoploss
+        return max(stop_pct, cfg["max_stoploss_pct"])
 
     # ─── confirm_trade_entry ───────────────────────────────────────────
 
@@ -404,7 +412,6 @@ class NexusAlpha(IStrategy):
         self._log_signal(last, entry_tag, side, rate, taken=True, current_time=current_time)
 
         # Stash entry-time context so _log_trade can compare entry vs exit
-        # Freqtrade's Trade object allows setting custom attributes
         self._pending_entry_context = {
             "regime": last.get("regime", None),
             "confidence": last.get("regime_confidence", None),
@@ -502,7 +509,7 @@ class NexusAlpha(IStrategy):
         atr = last.get("atr_14", 0)
         atr_sma = last.get("atr_14_sma", atr)
 
-        base_mult = self._get_base_stop_mult(tag)
+        base_mult = self._get_base_stop_mult(tag, pair)
 
         scaled_mult = scale_atr_stop(base_mult, atr, atr_sma)
         stop_distance = scaled_mult * atr
@@ -513,9 +520,9 @@ class NexusAlpha(IStrategy):
         # stop_distance is in price units; convert to fraction of entry
         stop_frac = stop_distance / current_rate
 
-        # Get wallet balance from proposed_stake (Freqtrade sets proposed = balance / max_trades)
-        # We recalculate based on our risk model
-        total_balance = proposed_stake * 3  # max_open_trades=3 → proposed ≈ balance/3
+        # Get wallet balance from proposed_stake
+        # max_open_trades=5 → proposed ≈ balance/5
+        total_balance = proposed_stake * MAX_OPEN_TRADES
         position = calculate_position_size(total_balance, risk_pct, stop_frac)
 
         # Clamp to Freqtrade limits
@@ -617,12 +624,7 @@ class NexusAlpha(IStrategy):
         current_time: datetime,
         last_row: pd.Series,
     ) -> None:
-        """Write completed trade to the trade journal CSV.
-
-        Captures full context at entry AND exit so we can analyze what
-        worked, what didn't, and why.  This is the feedback loop that
-        makes the system learn over time.
-        """
+        """Write completed trade to the trade journal CSV."""
         try:
             TRADE_LOG_DIR.mkdir(parents=True, exist_ok=True)
             month_str = current_time.strftime("%Y-%m")

@@ -2,7 +2,7 @@
 Integration tests — feed synthetic data through the full pipeline end-to-end.
 
 Verifies:
-- TRANSITION regime = zero trades
+- TRANSITION regime = quarter-size trades (conf=0.25, below 0.50 after MTF penalty)
 - Regime detection → strategy selection → signal generation flow
 - Cooldown/circuit breaker interaction (via Freqtrade protections)
 - Stale/missing funding data doesn't crash the pipeline
@@ -88,26 +88,30 @@ def _run_full_pipeline(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ── Test 1: TRANSITION regime = zero trades ──────────────────────────────
+# ── Test 1: TRANSITION regime = low confidence trades ────────────────────
 
-class TestTransitionHardGate:
-    def test_transition_regime_has_zero_confidence(self):
-        """TRANSITION regime produces confidence=0.0, which is below the 0.6 hard gate."""
-        # TRANSITION confidence is 0.0 (spec), so risk = 0
-        risk = get_risk_percent(0.0)
+class TestTransitionSoftGate:
+    def test_transition_regime_has_025_confidence(self):
+        """TRANSITION regime produces confidence=0.25, which is below 0.50 hard gate."""
+        risk = get_risk_percent(0.25)
+        assert risk == 0.0  # 0.25 < 0.50 → blocked
+        assert can_trade(0.25, 0, 10000, 10000, 10000) is False
+
+    def test_confidence_below_050_blocks_risk(self):
+        """Risk manager blocks trades when confidence below 0.50 (hard gate)."""
+        risk = get_risk_percent(0.49)
         assert risk == 0.0
-        assert can_trade(0.0, 0, 10000, 10000, 10000) is False
+        assert can_trade(0.49, 0, 10000, 10000, 10000) is False
 
-    def test_confidence_below_06_blocks_risk(self):
-        """Risk manager blocks trades when confidence below 0.6 (hard gate)."""
-        risk = get_risk_percent(0.5)
-        assert risk == 0.0
-        assert can_trade(0.5, 0, 10000, 10000, 10000) is False
+    def test_confidence_at_050_allows_quarter_risk(self):
+        """Confidence = 0.50 allows trading at quarter risk (0.25%)."""
+        risk = get_risk_percent(0.50)
+        assert risk == 0.0025  # 0.25%
 
-    def test_confidence_above_06_allows_risk(self):
+    def test_confidence_above_060_allows_half_risk(self):
         """Confidence >= 0.6 allows trading at half risk."""
         risk = get_risk_percent(0.65)
-        assert risk > 0.0
+        assert risk == 0.005  # 0.5%
 
     def test_pipeline_no_crash_in_transition(self):
         """Full pipeline with TRANSITION regime doesn't crash."""
@@ -115,7 +119,7 @@ class TestTransitionHardGate:
         df = add_regime_indicators(df)
         df = apply_regime(df)
         df["regime"] = TRANSITION
-        df["regime_confidence"] = 0.0
+        df["regime_confidence"] = 0.25
         df = add_trend_indicators(df)
         df = add_mr_indicators(df)
         df = add_funding_indicators(df)
@@ -147,10 +151,8 @@ class TestEndToEndPipeline:
         """Strong uptrend data should produce at least some trend following signals."""
         df = _make_ohlcv(400, trend=50.0, noise=30.0, seed=7)
         df = _run_full_pipeline(df)
-        # After warmup, expect some trending bull regime
         tail = df.tail(100)
         has_trending = (tail["regime"] == TRENDING_BULL).any()
-        # May or may not have entry signals (9 conditions are strict), but regime should detect
         assert has_trending, "Strong uptrend should produce TRENDING_BULL regime"
 
     def test_sideways_market_produces_ranging_regime(self):
@@ -177,7 +179,6 @@ class TestFundingDataGraceful:
         df = add_regime_indicators(df)
         df = apply_regime(df)
         df = add_funding_indicators(df)
-        # funding_rate and long_short_ratio are NaN by default
         df = populate_funding_entries(df)
         assert df["fr_enter_long"].sum() == 0
         assert df["fr_enter_short"].sum() == 0
@@ -195,11 +196,9 @@ class TestFundingDataGraceful:
         df = add_regime_indicators(df)
         df = apply_regime(df)
         df = add_funding_indicators(df)
-        # Set funding data only for last 10 rows
         df.loc[df.index[-10:], "funding_rate"] = -0.001
         df.loc[df.index[-10:], "long_short_ratio"] = 0.5
         df = populate_funding_entries(df)
-        # Should not crash; some of last 10 may or may not signal
         assert True
 
 
@@ -209,7 +208,7 @@ class TestConfidenceScaling:
     def test_high_confidence_full_risk(self):
         risk = get_risk_percent(0.85)
         assert risk == 0.01  # 1%
-        size = calculate_position_size(10000, risk, 0.02)  # 2% stop
+        size = calculate_position_size(10000, risk, 0.02)
         # risk = 10000 * 0.01 = 100, position = 100 / 0.02 = 5000
         # But cap = 10000 * 0.33 = 3300, so size = 3300
         assert size == pytest.approx(3300.0)
@@ -221,8 +220,16 @@ class TestConfidenceScaling:
         # risk = 10000 * 0.005 = 50, position = 50 / 0.02 = 2500
         assert size == pytest.approx(2500.0)
 
+    def test_quarter_risk_tier(self):
+        """Confidence 0.55 → 0.25% risk tier."""
+        risk = get_risk_percent(0.55)
+        assert risk == 0.0025  # 0.25%
+        size = calculate_position_size(10000, risk, 0.02)
+        # risk = 10000 * 0.0025 = 25, position = 25 / 0.02 = 1250
+        assert size == pytest.approx(1250.0)
+
     def test_low_confidence_zero_size(self):
-        risk = get_risk_percent(0.5)  # below 0.6 hard gate
+        risk = get_risk_percent(0.49)  # below 0.50 hard gate
         assert risk == 0.0
         size = calculate_position_size(10000, risk, 0.02)
         assert size == 0.0
@@ -239,24 +246,18 @@ class TestConfidenceScaling:
         balance = 10000
         risk_pct = 0.01  # $100 risk
 
-        # Use stop fractions large enough that the 33% cap doesn't bind
-        # Normal vol: stop_frac = 0.05 → position = 100/0.05 = 2000 (< 3300 cap)
         normal_mult = scale_atr_stop(2.0, 100, 100)
         assert normal_mult == 2.0
         normal_stop_frac = 0.05
         normal_pos = calculate_position_size(balance, risk_pct, normal_stop_frac)
 
-        # Spiked vol: ATR 2x SMA → multiplier scales up
         spiked_mult = scale_atr_stop(2.0, 200, 100)
         assert spiked_mult > 2.0
-        # Stop fraction doubles proportionally
         spiked_stop_frac = normal_stop_frac * (spiked_mult / normal_mult) * 2
         spiked_pos = calculate_position_size(balance, risk_pct, spiked_stop_frac)
 
-        # Position is smaller with wider stop
         assert spiked_pos < normal_pos
 
-        # Dollar risk stays the same ($100) for both
         dollar_risk_normal = normal_pos * normal_stop_frac
         dollar_risk_spiked = spiked_pos * spiked_stop_frac
         assert dollar_risk_normal == pytest.approx(100.0, rel=0.01)
@@ -271,7 +272,7 @@ class TestMultiTFIntegration:
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.9, VOLATILE, 0.3)
         assert regime == VOLATILE
         assert conf == 0.3
-        # VOLATILE with conf 0.3 < 0.6 → blocked by hard gate
+        # VOLATILE with conf 0.3 < 0.50 → blocked by hard gate
         risk = get_risk_percent(conf)
         assert risk == 0.0
 
@@ -280,7 +281,7 @@ class TestMultiTFIntegration:
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.7, RANGING, 0.6)
         assert conf == pytest.approx(0.56)  # 0.7 * 0.80
         risk = get_risk_percent(conf)
-        assert risk == 0.0  # 0.56 < 0.6 hard gate → no trade
+        assert risk == 0.0025  # 0.56 is in 0.50-0.60 → quarter risk
 
     def test_agreement_preserves_confidence(self):
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.8, TRENDING_BULL, 0.7)
@@ -302,7 +303,7 @@ class TestCircuitBreakers:
         assert can_trade(0.8, 0, 9750, 10000, 10000) is True
 
     def test_max_open_trades_blocks(self):
-        assert can_trade(0.8, 3, 10000, 10000, 10000) is False
+        assert can_trade(0.8, 5, 10000, 10000, 10000) is False  # MAX_OPEN_TRADES = 5
 
     def test_total_drawdown_blocks(self):
         assert can_trade(0.8, 0, 8400, 10000, 10000) is False
@@ -338,7 +339,6 @@ class TestStrategyExits:
 class TestSignalLogging:
     def test_log_signal_creates_csv(self):
         """Signal logging should create a CSV file with correct columns."""
-        # Use the logging function from NexusAlpha directly
         import csv
         from datetime import datetime
         from pathlib import Path
@@ -348,7 +348,6 @@ class TestSignalLogging:
             signal_dir = tmp_dir / "signals"
             signal_dir.mkdir()
 
-            # Simulate what _log_signal does
             columns = [
                 "timestamp", "schema_version",
                 "rsi_14", "macd_histogram", "bb_percent_b", "adx_14",
@@ -396,7 +395,6 @@ class TestSignalLogging:
                 writer.writeheader()
                 writer.writerow(record)
 
-            # Verify
             assert filepath.exists()
             read_df = pd.read_csv(filepath)
             assert len(read_df) == 1
@@ -466,7 +464,6 @@ class TestSignalLogging:
                 writer.writeheader()
                 writer.writerow(record)
 
-            # Verify
             read_df = pd.read_csv(filepath)
             assert len(read_df) == 1
             row = read_df.iloc[0]
@@ -508,8 +505,6 @@ class TestSignalLogging:
 
             filepath = trade_dir / "trades_2026-03.csv"
 
-            # Simulate a mean reversion trade that got stopped out
-            # because the regime changed from RANGING to TRENDING
             record = {
                 "trade_id": 2,
                 "pair": "BTC/USDT:USDT",
@@ -545,10 +540,9 @@ class TestSignalLogging:
 
             read_df = pd.read_csv(filepath)
             row = read_df.iloc[0]
-            # Key insight: regime changed, ADX jumped from 16→30, ATR spiked
             assert row["regime_at_entry"] == "RANGING"
             assert row["regime_at_exit"] == "TRENDING_BULL"
             assert row["exit_reason"] == "regime_change"
-            assert row["atr_at_exit"] > row["atr_at_entry"]  # vol spiked
+            assert row["atr_at_exit"] > row["atr_at_entry"]
         finally:
             shutil.rmtree(tmp_dir)

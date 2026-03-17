@@ -1,4 +1,4 @@
-"""Tests for trend following strategy — 9-AND confluence entry logic."""
+"""Tests for trend following strategy — tiered confluence (3 gates + 2-of-4 scoring)."""
 
 import numpy as np
 import pandas as pd
@@ -12,28 +12,29 @@ from strategies.core.trend_following import (
 
 
 def _golden_path_long(n: int = 6) -> pd.DataFrame:
-    """Create a DataFrame where ALL 6 entry conditions (3-8) are met at the last row.
+    """Create a DataFrame where all hard gates + full confluence are met at last row.
 
-    This is the base fixture: every test disables exactly one condition
-    and verifies the signal disappears.
+    Hard gates: Supertrend bullish, close > EMA50, RSI in 30-70
+    Scoring: EMA9 > EMA21, ADX > 20, volume > 1.5x SMA, close > EMA200
     """
     return pd.DataFrame({
-        # Condition 3: Supertrend bullish
+        # Gate 1: Supertrend bullish
         "supertrend_direction": [1] * n,
-        # Condition 4: ADX > 28 AND rising (idx[-1] > idx[-4])
-        "tf_adx": [20, 22, 24, 26, 28, 32],
-        # Condition 5: Close > EMA200 and EMA50
+        # Gate 2: Close > EMA50
         "close": [51000, 51100, 51200, 51300, 51400, 51500],
-        "ema_200": [50000] * n,
         "ema_50": [50500] * n,
-        # Condition 6: StochRSI K > D, was recently oversold
-        "stochrsi_k": [20, 15, 10, 25, 40, 55],  # was < 45 within lookback, now K > D
-        "stochrsi_d": [30, 25, 20, 30, 35, 50],   # K > D at last row
-        # Condition 7: Volume above average
-        "volume": [500, 500, 500, 500, 500, 600],
-        "volume_sma_20": [400] * n,
-        # Condition 8: RSI not overbought
-        "rsi_14": [55, 55, 55, 55, 55, 60],
+        # Gate 3: RSI between 30-70
+        "rsi_14": [50, 50, 50, 50, 50, 55],
+        # Score A: EMA9 > EMA21
+        "ema_9": [51200] * n,
+        "ema_21": [51000] * n,
+        # Score B: ADX > 20 (BTC default)
+        "tf_adx": [18, 19, 20, 22, 24, 25],
+        # Score C: Volume > 1.5x SMA
+        "volume": [500, 500, 500, 500, 500, 700],
+        "volume_sma_20": [400] * n,   # 700 > 400 * 1.5 = 600 ✓
+        # Score D: Close > EMA200
+        "ema_200": [50000] * n,
     })
 
 
@@ -41,15 +42,15 @@ def _golden_path_short(n: int = 6) -> pd.DataFrame:
     """Mirror of golden path for short entries."""
     return pd.DataFrame({
         "supertrend_direction": [-1] * n,
-        "tf_adx": [20, 22, 24, 26, 28, 32],
         "close": [49000, 48900, 48800, 48700, 48600, 48500],
-        "ema_200": [50000] * n,
         "ema_50": [49500] * n,
-        "stochrsi_k": [80, 85, 90, 75, 60, 45],  # was > 55 within lookback, now K < D
-        "stochrsi_d": [70, 75, 80, 70, 65, 50],   # K < D at last row
-        "volume": [500, 500, 500, 500, 500, 600],
+        "rsi_14": [50, 50, 50, 50, 50, 45],
+        "ema_9": [48800] * n,
+        "ema_21": [49000] * n,     # EMA9 < EMA21 ✓
+        "tf_adx": [18, 19, 20, 22, 24, 25],
+        "volume": [500, 500, 500, 500, 500, 700],
         "volume_sma_20": [400] * n,
-        "rsi_14": [45, 45, 45, 45, 45, 40],
+        "ema_200": [50000] * n,    # close < EMA200 ✓
     })
 
 
@@ -67,7 +68,8 @@ class TestAddTrendIndicators:
         })
         df = add_trend_indicators(df)
         expected = ["supertrend_direction", "supertrend_value", "tf_adx",
-                    "ema_9", "ema_50", "ema_200", "stochrsi_k", "stochrsi_d",
+                    "ema_9", "ema_21", "ema_50", "ema_200",
+                    "stochrsi_k", "stochrsi_d",
                     "atr_14", "volume_sma_20", "rsi_14",
                     "bb_upper", "bb_lower", "bb_middle"]
         for col in expected:
@@ -78,78 +80,105 @@ class TestAddTrendIndicators:
         df = add_trend_indicators(df)
         assert len(df) == 0
 
+    def test_per_pair_supertrend(self):
+        """SOL pair should use different Supertrend settings."""
+        n = 300
+        rng = np.random.default_rng(42)
+        closes = np.cumsum(rng.normal(0, 100, n)) + 50000
+        df = pd.DataFrame({
+            "open": closes + rng.normal(0, 50, n),
+            "high": closes + rng.uniform(50, 200, n),
+            "low": closes - rng.uniform(50, 200, n),
+            "close": closes,
+            "volume": rng.uniform(100, 1000, n),
+        })
+        # Should not crash with different pair
+        df = add_trend_indicators(df, pair="SOL/USDT:USDT")
+        assert "supertrend_direction" in df.columns
+
 
 class TestPopulateTrendEntries:
-    def test_all_conditions_met_long(self):
-        """Golden path: all 6 conditions met → signal fires."""
+    def test_all_gates_plus_full_confluence_long(self):
+        """All 3 gates TRUE + 4/4 confluence = signal fires."""
         df = _golden_path_long()
         df = populate_trend_entries(df)
         assert df.loc[5, "tf_enter_long"] == 1
         assert df.loc[5, "tf_signal_tag"] == "trend_following"
 
+    def test_all_gates_plus_min_confluence_long(self):
+        """All 3 gates TRUE + exactly 2/4 confluence = signal fires."""
+        df = _golden_path_long()
+        # Disable score C (volume) and score D (EMA200)
+        df["volume"] = [100] * 6                # below 1.5x SMA → score C = 0
+        df["ema_200"] = [55000] * 6             # close below → score D = 0
+        # Score A (EMA9>EMA21) = 1, Score B (ADX>20) = 1 → total = 2 ✓
+        df = populate_trend_entries(df)
+        assert df.loc[5, "tf_enter_long"] == 1
+
+    def test_all_gates_but_insufficient_confluence(self):
+        """All 3 gates TRUE but only 1/4 confluence = NO signal."""
+        df = _golden_path_long()
+        # Disable B, C, D — only score A remains
+        df["tf_adx"] = [10] * 6                 # below 20 → score B = 0
+        df["volume"] = [100] * 6                # below 1.5x → score C = 0
+        df["ema_200"] = [55000] * 6             # close below → score D = 0
+        # Score A (EMA9>EMA21) = 1 → total = 1 < 2
+        df = populate_trend_entries(df)
+        assert df.loc[5, "tf_enter_long"] == 0
+
+    def test_no_signal_when_supertrend_bearish(self):
+        """Gate 1 fails: Supertrend bearish blocks long entry."""
+        df = _golden_path_long()
+        df["supertrend_direction"] = -1
+        df = populate_trend_entries(df)
+        assert df["tf_enter_long"].sum() == 0
+
+    def test_no_signal_when_below_ema50(self):
+        """Gate 2 fails: close below EMA50."""
+        df = _golden_path_long()
+        df["ema_50"] = [55000] * 6
+        df = populate_trend_entries(df)
+        assert df["tf_enter_long"].sum() == 0
+
+    def test_no_signal_when_rsi_overbought(self):
+        """Gate 3 fails: RSI above 70."""
+        df = _golden_path_long()
+        df["rsi_14"] = [75, 75, 75, 75, 75, 75]
+        df = populate_trend_entries(df)
+        assert df["tf_enter_long"].sum() == 0
+
+    def test_no_signal_when_rsi_oversold(self):
+        """Gate 3 fails: RSI below 30."""
+        df = _golden_path_long()
+        df["rsi_14"] = [25, 25, 25, 25, 25, 25]
+        df = populate_trend_entries(df)
+        assert df["tf_enter_long"].sum() == 0
+
     def test_all_conditions_met_short(self):
-        """Golden path short: all 6 conditions met → signal fires."""
+        """Golden path short: all gates + confluence met."""
         df = _golden_path_short()
         df = populate_trend_entries(df)
         assert df.loc[5, "tf_enter_short"] == 1
         assert df.loc[5, "tf_signal_tag"] == "trend_following"
 
-    def test_no_signal_when_supertrend_bearish(self):
-        """Condition 3 fails: Supertrend bearish blocks long entry."""
+    def test_per_pair_adx_threshold(self):
+        """SOL uses ADX threshold 25 instead of BTC's 20."""
         df = _golden_path_long()
-        df["supertrend_direction"] = -1  # bearish
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
+        df["tf_adx"] = [18, 19, 20, 21, 22, 22]  # above 20 (BTC), below 25 (SOL)
+        # Disable other scores so only ADX matters
+        df["ema_9"] = [49000] * 6     # below EMA21 → score A = 0
+        df["volume"] = [100] * 6       # score C = 0
+        # Score D = 1 (close > EMA200), Score B = 1 for BTC, 0 for SOL
 
-    def test_no_signal_when_adx_below_threshold(self):
-        """Condition 4 fails: ADX below 28 blocks entry."""
-        df = _golden_path_long()
-        df["tf_adx"] = [15, 16, 17, 18, 19, 20]  # all below 28
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
+        # BTC: ADX 22 > 20 → score B = 1, total = 1+1 = 2 ✓
+        df_btc = df.copy()
+        df_btc = populate_trend_entries(df_btc, pair="BTC/USDT:USDT")
+        assert df_btc.loc[5, "tf_enter_long"] == 1
 
-    def test_no_signal_when_adx_not_rising(self):
-        """Condition 4 fails: ADX not rising (lower than 3 candles ago)."""
-        df = _golden_path_long()
-        df["tf_adx"] = [35, 34, 33, 32, 31, 30]  # above 28 but falling
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
-
-    def test_no_signal_when_below_ema200(self):
-        """Condition 5 fails: close below EMA200."""
-        df = _golden_path_long()
-        df["ema_200"] = [55000] * 6  # close is below EMA200
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
-
-    def test_no_signal_when_below_ema50(self):
-        """Condition 5 fails: close below EMA50."""
-        df = _golden_path_long()
-        df["ema_50"] = [55000] * 6  # close is below EMA50
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
-
-    def test_no_signal_when_stochrsi_not_oversold(self):
-        """Condition 6 fails: StochRSI was never oversold recently."""
-        df = _golden_path_long()
-        df["stochrsi_k"] = [60, 65, 70, 75, 80, 85]  # never below 45
-        df["stochrsi_d"] = [55, 60, 65, 70, 75, 80]   # K > D but no oversold
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
-
-    def test_no_signal_when_low_volume(self):
-        """Condition 7 fails: volume below SMA."""
-        df = _golden_path_long()
-        df["volume"] = [100] * 6  # below SMA of 400
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
-
-    def test_no_signal_when_rsi_overbought(self):
-        """Condition 8 fails: RSI above 75 blocks long entry."""
-        df = _golden_path_long()
-        df["rsi_14"] = [78, 78, 78, 78, 78, 78]  # above 75
-        df = populate_trend_entries(df)
-        assert df["tf_enter_long"].sum() == 0
+        # SOL: ADX 22 < 25 → score B = 0, total = 0+1 = 1 < 2
+        df_sol = df.copy()
+        df_sol = populate_trend_entries(df_sol, pair="SOL/USDT:USDT")
+        assert df_sol.loc[5, "tf_enter_long"] == 0
 
     def test_signal_tag_column_exists(self):
         df = _golden_path_long()

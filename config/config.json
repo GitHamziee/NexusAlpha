@@ -1,7 +1,7 @@
 {
     "trading_mode": "futures",
     "margin_mode": "isolated",
-    "max_open_trades": 3,
+    "max_open_trades": 5,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.95,
@@ -25,7 +25,9 @@
             }
         },
         "pair_whitelist": [
-            "BTC/USDT:USDT"
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT"
         ],
         "pair_blacklist": []
     },

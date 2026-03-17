@@ -1,16 +1,21 @@
 """
-Trend Following Strategy — 9-AND confluence for high-selectivity entries.
+Trend Following Strategy — Tiered confluence for balanced signal generation.
 
-ALL conditions must be simultaneously true for an entry signal.
-Conditions 1-2 (regime gate, MTF) and 9 (cooldown) are handled externally.
-This module implements conditions 3-8:
+Architecture: 3 hard gates (ALL must be true) + 2-of-4 confluence scoring.
+Per-pair parameters loaded from thresholds.PAIR_CONFIGS.
 
-  3. Supertrend bullish (price above Supertrend line)
-  4. ADX > 28 AND rising (ADX > ADX[3])
-  5. Price structure: close > EMA(200) AND close > EMA(50)
-  6. StochRSI K crosses above D from below oversold zone
-  7. Volume > Volume SMA(20) x 1.0
-  8. RSI(14) < 75 (not overbought)
+Hard gates:
+  1. Supertrend bullish (price above Supertrend line)
+  2. Close > EMA(50) (medium-term trend aligned)
+  3. RSI(14) between 30-70 (not at extremes)
+
+Confluence score (need >= 2 of 4):
+  A. EMA(9) > EMA(21) (short-term trend aligned)
+  B. ADX(14) > threshold (trend has strength)
+  C. Volume > threshold x SMA(20) (participation)
+  D. Close > EMA(200) (major trend aligned)
+
+Conditions 1-2 (regime gate, MTF) and cooldown are handled externally.
 """
 
 from __future__ import annotations
@@ -26,39 +31,33 @@ from .thresholds import (
     ATR_PERIOD,
     BB_PERIOD,
     BB_STD,
+    EMA_50,
     RSI_PERIOD,
     STOCHRSI_RSI_PERIOD,
     STOCHRSI_SMOOTH,
     STOCHRSI_STOCH_PERIOD,
-    SUPERTREND_MULT,
-    SUPERTREND_PERIOD,
     TF_ADX_DEATH_LEVEL as ADX_DEATH_LEVEL,
-    TF_ADX_ENTRY_THRESH,
     TF_EMA_FAST as EMA_FAST,
     TF_EMA_MID as EMA_MID,
     TF_EMA_SLOW as EMA_SLOW,
-    TF_RSI_OB_GUARD,
-    TF_RSI_OS_GUARD,
-    TF_STOCHRSI_LOOKBACK,
-    TF_STOCHRSI_OVERBOUGHT,
-    TF_STOCHRSI_OVERSOLD,
-    TF_STOP_ATR_MULT as STOP_ATR_MULT,
-    TF_TIME_STOP_CANDLES as TIME_STOP_CANDLES,
-    TF_VOLUME_MULT,
     VOLUME_SMA_PERIOD,
+    get_pair_config,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def add_trend_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def add_trend_indicators(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.DataFrame:
     """Compute all indicators needed by the trend following strategy."""
     if df.empty:
         return df
 
-    # Supertrend
+    cfg = get_pair_config(pair)
+
+    # Supertrend (per-pair multiplier and period)
     st = ta.supertrend(df["high"], df["low"], df["close"],
-                       length=SUPERTREND_PERIOD, multiplier=SUPERTREND_MULT)
+                       length=cfg["supertrend_period"],
+                       multiplier=cfg["supertrend_mult"])
     if st is not None and not st.empty:
         st_dir_col = [c for c in st.columns if c.startswith("SUPERTd_")][0]
         st_val_col = [c for c in st.columns if c.startswith("SUPERT_") and "d_" not in c][0]
@@ -68,19 +67,20 @@ def add_trend_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df["supertrend_direction"] = float("nan")
         df["supertrend_value"] = float("nan")
 
-    # ADX (may already exist from regime detector, recompute here for safety)
+    # ADX
     adx_df = ta.adx(df["high"], df["low"], df["close"], length=ADX_PERIOD)
     if adx_df is not None:
         df["tf_adx"] = adx_df[f"ADX_{ADX_PERIOD}"]
     else:
         df["tf_adx"] = float("nan")
 
-    # EMAs
+    # EMAs: 9, 21, 50, 200
     df["ema_9"] = ta.ema(df["close"], length=EMA_FAST)
-    df["ema_50"] = ta.ema(df["close"], length=EMA_MID)
+    df["ema_21"] = ta.ema(df["close"], length=EMA_MID)
+    df["ema_50"] = ta.ema(df["close"], length=EMA_50)
     df["ema_200"] = ta.ema(df["close"], length=EMA_SLOW)
 
-    # StochRSI
+    # StochRSI (kept for logging/ML, not hard-gated)
     stochrsi = ta.stochrsi(df["close"], length=STOCHRSI_RSI_PERIOD,
                            rsi_length=STOCHRSI_RSI_PERIOD,
                            k=STOCHRSI_STOCH_PERIOD, d=STOCHRSI_SMOOTH)
@@ -122,12 +122,12 @@ def add_trend_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def populate_trend_entries(df: pd.DataFrame) -> pd.DataFrame:
-    """Add trend following entry signals using 9-AND confluence.
+def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.DataFrame:
+    """Add trend following entry signals using tiered confluence.
 
     Adds columns: tf_enter_long, tf_enter_short, tf_signal_tag.
-    ALL conditions (3-8) must be true simultaneously.
-    Conditions 1-2 (regime, MTF) and 9 (cooldown) are handled externally.
+    3 hard gates (ALL must be true) + 2-of-4 confluence scoring.
+    Regime gate and cooldown are handled externally.
     """
     if df.empty:
         df["tf_enter_long"] = pd.Series(dtype=int)
@@ -135,59 +135,46 @@ def populate_trend_entries(df: pd.DataFrame) -> pd.DataFrame:
         df["tf_signal_tag"] = pd.Series(dtype=str)
         return df
 
-    # ── LONG CONDITIONS (all must be true) ─────────────────────────────
+    cfg = get_pair_config(pair)
 
-    # Condition 3: Supertrend bullish
-    cond_3_long = df["supertrend_direction"] == 1
+    # ── LONG ─────────────────────────────────────────────────────────────
 
-    # Condition 4: ADX > 28 AND rising (higher than 3 candles ago)
-    cond_4_long = (df["tf_adx"] > TF_ADX_ENTRY_THRESH) & (df["tf_adx"] > df["tf_adx"].shift(3))
+    # Hard gates (ALL must be true)
+    gate_1 = df["supertrend_direction"] == 1                          # Supertrend bullish
+    gate_2 = df["close"] > df["ema_50"]                               # above medium-term trend
+    gate_3 = (df["rsi_14"] > cfg["tf_rsi_low"]) & \
+             (df["rsi_14"] < cfg["tf_rsi_high"])                      # RSI not extreme
 
-    # Condition 5: Close > EMA(200) AND Close > EMA(50)
-    cond_5_long = (df["close"] > df["ema_200"]) & (df["close"] > df["ema_50"])
+    hard_gate_long = gate_1 & gate_2 & gate_3
 
-    # Condition 6: StochRSI K crosses above D from oversold zone
-    stochrsi_was_oversold = df["stochrsi_k"].rolling(
-        window=TF_STOCHRSI_LOOKBACK, min_periods=1
-    ).min() < TF_STOCHRSI_OVERSOLD
-    cond_6_long = (df["stochrsi_k"] > df["stochrsi_d"]) & stochrsi_was_oversold
+    # Confluence scoring (need >= 2 of 4)
+    score_a = (df["ema_9"] > df["ema_21"]).astype(int)                # short-term trend aligned
+    score_b = (df["tf_adx"] > cfg["tf_adx_thresh"]).astype(int)       # trend strength
+    score_c = (df["volume"] > df["volume_sma_20"] * cfg["tf_volume_mult"]).astype(int)  # volume
+    score_d = (df["close"] > df["ema_200"]).astype(int)               # major trend aligned
 
-    # Condition 7: Volume above average
-    cond_7_long = df["volume"] > df["volume_sma_20"] * TF_VOLUME_MULT
+    confluence_long = score_a + score_b + score_c + score_d
+    has_confluence_long = confluence_long >= 2
 
-    # Condition 8: RSI not overbought
-    cond_8_long = df["rsi_14"] < TF_RSI_OB_GUARD
+    long_cond = hard_gate_long & has_confluence_long
 
-    # 9-AND: ALL must be true
-    long_cond = cond_3_long & cond_4_long & cond_5_long & cond_6_long & cond_7_long & cond_8_long
+    # ── SHORT (mirror) ───────────────────────────────────────────────────
 
-    # ── SHORT CONDITIONS (mirror) ──────────────────────────────────────
+    gate_1s = df["supertrend_direction"] == -1                         # Supertrend bearish
+    gate_2s = df["close"] < df["ema_50"]                               # below medium-term trend
+    gate_3s = gate_3                                                    # same RSI band
 
-    # Condition 3: Supertrend bearish
-    cond_3_short = df["supertrend_direction"] == -1
+    hard_gate_short = gate_1s & gate_2s & gate_3s
 
-    # Condition 4: ADX > 28 AND rising
-    cond_4_short = cond_4_long  # ADX conditions are the same for both sides
+    score_as = (df["ema_9"] < df["ema_21"]).astype(int)                # short-term trend down
+    score_ds = (df["close"] < df["ema_200"]).astype(int)               # below major trend
 
-    # Condition 5: Close < EMA(200) AND Close < EMA(50)
-    cond_5_short = (df["close"] < df["ema_200"]) & (df["close"] < df["ema_50"])
+    confluence_short = score_as + score_b + score_c + score_ds
+    has_confluence_short = confluence_short >= 2
 
-    # Condition 6: StochRSI K crosses below D from overbought zone
-    stochrsi_was_overbought = df["stochrsi_k"].rolling(
-        window=TF_STOCHRSI_LOOKBACK, min_periods=1
-    ).max() > TF_STOCHRSI_OVERBOUGHT
-    cond_6_short = (df["stochrsi_k"] < df["stochrsi_d"]) & stochrsi_was_overbought
+    short_cond = hard_gate_short & has_confluence_short
 
-    # Condition 7: Volume above average
-    cond_7_short = cond_7_long  # same for both sides
-
-    # Condition 8: RSI not oversold
-    cond_8_short = df["rsi_14"] > TF_RSI_OS_GUARD
-
-    # 9-AND: ALL must be true
-    short_cond = cond_3_short & cond_4_short & cond_5_short & cond_6_short & cond_7_short & cond_8_short
-
-    # ── OUTPUT ─────────────────────────────────────────────────────────
+    # ── OUTPUT ───────────────────────────────────────────────────────────
     df["tf_enter_long"] = long_cond.astype(int).fillna(0).astype(int)
     df["tf_enter_short"] = short_cond.astype(int).fillna(0).astype(int)
 

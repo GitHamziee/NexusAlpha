@@ -106,7 +106,7 @@ class TestClassifyRegime:
         assert regime == VOLATILE
 
     def test_transition(self):
-        """ADX between range and trend thresholds → TRANSITION (hard gate, conf=0.0)."""
+        """ADX between range and trend thresholds → TRANSITION (soft gate, conf=0.25)."""
         # baseline=22, range_thresh = 18, trend_thresh = 28
         regime, conf = classify_regime(
             adx=23, plus_di=18, minus_di=17,
@@ -115,7 +115,7 @@ class TestClassifyRegime:
             adx_baseline=22,
         )
         assert regime == TRANSITION
-        assert conf == pytest.approx(0.0)
+        assert conf == pytest.approx(0.25)
 
     def test_nan_returns_transition(self):
         """Any NaN input should safely return TRANSITION with zero conf."""
@@ -149,7 +149,7 @@ class TestClassifyRegime:
             adx_baseline=30,
         )
         assert regime == TRANSITION
-        assert conf == pytest.approx(0.0)
+        assert conf == pytest.approx(0.25)
 
     def test_adaptive_threshold_low_baseline(self):
         """When ADX baseline is low, trend threshold drops to floor."""
@@ -199,9 +199,9 @@ class TestMultiTFConfirmation:
         assert c == 0.3
 
     def test_transition_on_15m(self):
-        r, c = confirm_regime_multitf(TRANSITION, 0.0, RANGING, 0.6)
+        r, c = confirm_regime_multitf(TRANSITION, 0.25, RANGING, 0.6)
         assert r == TRANSITION
-        assert c == pytest.approx(0.0)  # TRANSITION conf=0.0, penalty irrelevant
+        assert c == pytest.approx(0.20)  # 0.25 * 0.80 penalty (disagreement)
 
 
 # ── full pipeline tests (add_regime_indicators → apply_regime) ───────────

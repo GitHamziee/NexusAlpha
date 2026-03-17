@@ -4,14 +4,18 @@ Risk Manager — position sizing, drawdown circuit breakers, ATR stop scaling.
 Every trade decision runs through here.  This module matters more than all
 strategies combined: survive first, profit second.
 
-Non-negotiable rules (from spec Section VIII):
+Rules:
 - Max 1% risk per trade (0.5% for funding)
-- Max 3 open trades
+- Max 5 open trades (3 pairs need headroom)
 - Max 3x leverage
 - 3% daily drawdown → stop trading today
 - 15% total drawdown → full system review
 - 4-candle cooldown after every loss
-- Confidence-scaled sizing: >=0.8 → 1%, 0.6-0.8 → 0.5%, <0.6 → NO TRADE
+- Confidence-scaled sizing:
+    >= 0.8 → 1.0%
+    0.6-0.8 → 0.5%
+    0.5-0.6 → 0.25% (quarter risk — transition/penalized regimes)
+    < 0.5 → NO TRADE
 
 Dynamic ATR stop scaling: when ATR > 1.5x its 100-period SMA, widen stops
 proportionally and shrink position so dollar risk stays constant.
@@ -60,7 +64,7 @@ def get_risk_percent(regime_confidence: float, is_funding: bool = False) -> floa
     """Return per-trade risk as a decimal based on regime confidence.
 
     Funding rate trades are always half-size regardless of confidence.
-    Confidence < CONFIRM_MIN_CONFIDENCE (0.6) → 0.0 (no trade allowed).
+    Confidence < CONFIRM_MIN_CONFIDENCE (0.50) → 0.0 (no trade allowed).
     """
     if regime_confidence < CONFIRM_MIN_CONFIDENCE:
         return 0.0
@@ -69,11 +73,11 @@ def get_risk_percent(regime_confidence: float, is_funding: bool = False) -> floa
         return FUNDING_RISK_PER_TRADE
 
     if regime_confidence >= 0.8:
-        return MAX_RISK_PER_TRADE  # 1.0%
+        return MAX_RISK_PER_TRADE       # 1.0%
     if regime_confidence >= 0.6:
-        return MAX_RISK_PER_TRADE / 2  # 0.5%
-    # CONFIRM_MIN_CONFIDENCE <= confidence < 0.6
-    return MAX_RISK_PER_TRADE / 4  # 0.25%
+        return MAX_RISK_PER_TRADE / 2   # 0.5%
+    # 0.50 <= confidence < 0.6 — quarter risk (transition/penalized)
+    return MAX_RISK_PER_TRADE / 4       # 0.25%
 
 
 # Regime-signal alignment map: which regimes "match" which signal types

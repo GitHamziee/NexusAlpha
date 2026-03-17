@@ -1,16 +1,20 @@
 """
-Mean Reversion Strategy — 9-AND confluence for high-selectivity entries.
+Mean Reversion Strategy — Simplified 3+1 tiered confluence.
 
-ALL conditions must be simultaneously true for an entry signal.
-Conditions 1-2 (regime=RANGING, MTF) and 9 (cooldown) are handled externally.
-This module implements conditions 3-8:
+Architecture: 3 hard gates (ALL must be true) + 1-of-3 confluence scoring.
+Per-pair parameters loaded from thresholds.PAIR_CONFIGS.
 
-  3. Close <= BB Lower x 1.001 (at or below lower band)
-  4. RSI(14) < 32 (oversold)
-  5. MACD histogram turning positive (hist > hist[1] AND hist[1] < 0)
-  6. Volume > Volume SMA(20) x 1.1 (above-average volume on bounce)
-  7. Bullish candle (close > open)
-  8. Close > EMA(200) OR EMA(200) slope is flat
+Hard gates:
+  3. Close <= BB Lower x mult (at or below lower band)
+  4. RSI(14) < oversold threshold
+  5. Bullish candle (close > open)
+
+Confluence score (need >= 1 of 3):
+  A. Volume > threshold x SMA(20)
+  B. MACD histogram turning positive (was negative, now rising)
+  C. Close > EMA(200) or EMA(200) slope is flat
+
+Conditions 1-2 (regime=RANGING, MTF) and cooldown are handled externally.
 """
 
 from __future__ import annotations
@@ -24,33 +28,28 @@ import pandas_ta as ta
 from .thresholds import (
     ATR_PERIOD,
     BB_PERIOD,
-    BB_STD,
-    MR_BB_TOUCH_LONG_MULT,
-    MR_BB_TOUCH_SHORT_MULT,
     MR_EMA_SLOW as EMA_SLOW,
     MR_EMA200_FLAT_SLOPE,
     MR_MACD_FAST as MACD_FAST,
     MR_MACD_SIGNAL as MACD_SIGNAL,
     MR_MACD_SLOW as MACD_SLOW,
-    MR_RSI_OVERBOUGHT,
-    MR_RSI_OVERSOLD,
-    MR_STOP_ATR_MULT as STOP_ATR_MULT,
-    MR_TIME_STOP_CANDLES as TIME_STOP_CANDLES,
-    MR_VOLUME_MULT,
     RSI_PERIOD,
     VOLUME_SMA_PERIOD,
+    get_pair_config,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def add_mr_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def add_mr_indicators(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.DataFrame:
     """Compute all indicators needed by the mean reversion strategy."""
     if df.empty:
         return df
 
-    # Bollinger Bands
-    bbands = ta.bbands(df["close"], length=BB_PERIOD, std=BB_STD)
+    cfg = get_pair_config(pair)
+
+    # Bollinger Bands (per-pair std deviation)
+    bbands = ta.bbands(df["close"], length=BB_PERIOD, std=cfg["bb_std"])
     if bbands is not None and not bbands.empty:
         bbu_col = [c for c in bbands.columns if c.startswith("BBU_")][0]
         bbl_col = [c for c in bbands.columns if c.startswith("BBL_")][0]
@@ -89,12 +88,12 @@ def add_mr_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
-    """Add mean reversion entry signals using 9-AND confluence.
+def populate_mr_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.DataFrame:
+    """Add mean reversion entry signals using 3+1 tiered confluence.
 
     Adds columns: mr_enter_long, mr_enter_short, mr_signal_tag.
-    ALL conditions (3-8) must be true simultaneously.
-    Conditions 1-2 (regime=RANGING, MTF) and 9 (cooldown) are handled externally.
+    3 hard gates (ALL must be true) + 1-of-3 confluence scoring.
+    Regime gate and cooldown are handled externally.
     """
     if df.empty:
         df["mr_enter_long"] = pd.Series(dtype=int)
@@ -102,60 +101,47 @@ def populate_mr_entries(df: pd.DataFrame) -> pd.DataFrame:
         df["mr_signal_tag"] = pd.Series(dtype=str)
         return df
 
-    # ── LONG CONDITIONS (all must be true) ─────────────────────────────
+    cfg = get_pair_config(pair)
 
-    # Condition 3: Close at or below lower BB
-    cond_3_long = df["close"] <= df["mr_bb_lower"] * MR_BB_TOUCH_LONG_MULT
+    # ── LONG ─────────────────────────────────────────────────────────────
 
-    # Condition 4: RSI oversold
-    cond_4_long = df["mr_rsi"] < MR_RSI_OVERSOLD
+    # Hard gates (ALL must be true)
+    gate_1 = df["close"] <= df["mr_bb_lower"] * cfg["mr_bb_long_mult"]   # at/below lower BB
+    gate_2 = df["mr_rsi"] < cfg["mr_rsi_oversold"]                       # RSI oversold
+    gate_3 = df["close"] > df["open"]                                     # bullish candle
 
-    # Condition 5: MACD histogram turning positive (was negative, now rising)
-    cond_5_long = (
-        (df["mr_macd_hist"] > df["mr_macd_hist"].shift(1)) &
-        (df["mr_macd_hist"].shift(1) < 0)
-    )
+    hard_gate_long = gate_1 & gate_2 & gate_3
 
-    # Condition 6: Volume above average
-    cond_6_long = df["volume"] > df["mr_volume_sma"] * MR_VOLUME_MULT
-
-    # Condition 7: Bullish candle (momentum shifting)
-    cond_7_long = df["close"] > df["open"]
-
-    # Condition 8: Above EMA(200) OR EMA(200) slope is flat
+    # Confluence scoring (need >= 1 of 3)
+    score_a = (df["volume"] > df["mr_volume_sma"] * cfg["mr_volume_mult"]).astype(int)
+    score_b = ((df["mr_macd_hist"] > df["mr_macd_hist"].shift(1)) &
+               (df["mr_macd_hist"].shift(1) < 0)).astype(int)            # MACD turning positive
     ema_flat = df["mr_ema_200_slope"].abs() < MR_EMA200_FLAT_SLOPE
-    cond_8_long = (df["close"] > df["mr_ema_200"]) | ema_flat
+    score_c = ((df["close"] > df["mr_ema_200"]) | ema_flat).astype(int)  # above EMA200 or flat
 
-    # 9-AND: ALL must be true
-    long_cond = cond_3_long & cond_4_long & cond_5_long & cond_6_long & cond_7_long & cond_8_long
+    confluence_long = score_a + score_b + score_c
+    has_confluence_long = confluence_long >= 1
 
-    # ── SHORT CONDITIONS (mirror) ──────────────────────────────────────
+    long_cond = hard_gate_long & has_confluence_long
 
-    # Condition 3: Close at or above upper BB
-    cond_3_short = df["close"] >= df["mr_bb_upper"] * MR_BB_TOUCH_SHORT_MULT
+    # ── SHORT (mirror) ───────────────────────────────────────────────────
 
-    # Condition 4: RSI overbought
-    cond_4_short = df["mr_rsi"] > MR_RSI_OVERBOUGHT
+    gate_1s = df["close"] >= df["mr_bb_upper"] * cfg["mr_bb_short_mult"]  # at/above upper BB
+    gate_2s = df["mr_rsi"] > cfg["mr_rsi_overbought"]                     # RSI overbought
+    gate_3s = df["close"] < df["open"]                                     # bearish candle
 
-    # Condition 5: MACD histogram turning negative (was positive, now falling)
-    cond_5_short = (
-        (df["mr_macd_hist"] < df["mr_macd_hist"].shift(1)) &
-        (df["mr_macd_hist"].shift(1) > 0)
-    )
+    hard_gate_short = gate_1s & gate_2s & gate_3s
 
-    # Condition 6: Volume above average
-    cond_6_short = cond_6_long  # same for both sides
+    score_bs = ((df["mr_macd_hist"] < df["mr_macd_hist"].shift(1)) &
+                (df["mr_macd_hist"].shift(1) > 0)).astype(int)            # MACD turning negative
+    score_cs = ((df["close"] < df["mr_ema_200"]) | ema_flat).astype(int)
 
-    # Condition 7: Bearish candle
-    cond_7_short = df["close"] < df["open"]
+    confluence_short = score_a + score_bs + score_cs
+    has_confluence_short = confluence_short >= 1
 
-    # Condition 8: Below EMA(200) OR EMA(200) slope is flat
-    cond_8_short = (df["close"] < df["mr_ema_200"]) | ema_flat
+    short_cond = hard_gate_short & has_confluence_short
 
-    # 9-AND: ALL must be true
-    short_cond = cond_3_short & cond_4_short & cond_5_short & cond_6_short & cond_7_short & cond_8_short
-
-    # ── OUTPUT ─────────────────────────────────────────────────────────
+    # ── OUTPUT ───────────────────────────────────────────────────────────
     df["mr_enter_long"] = long_cond.astype(int).fillna(0).astype(int)
     df["mr_enter_short"] = short_cond.astype(int).fillna(0).astype(int)
 
