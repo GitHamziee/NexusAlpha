@@ -276,11 +276,11 @@ class TestMultiTFIntegration:
         assert risk == 0.0
 
     def test_disagreement_reduces_confidence(self):
-        """15m trending + 1H ranging → confidence reduced by 50%."""
+        """15m trending + 1H ranging → confidence reduced by 20%."""
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.7, RANGING, 0.6)
-        assert conf == pytest.approx(0.35)  # 0.7 * 0.50
+        assert conf == pytest.approx(0.56)  # 0.7 * 0.80
         risk = get_risk_percent(conf)
-        assert risk == 0.0  # 0.35 < 0.6 hard gate → no trade
+        assert risk == 0.0  # 0.56 < 0.6 hard gate → no trade
 
     def test_agreement_preserves_confidence(self):
         regime, conf = confirm_regime_multitf(TRENDING_BULL, 0.8, TRENDING_BULL, 0.7)

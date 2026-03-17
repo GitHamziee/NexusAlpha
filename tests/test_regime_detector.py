@@ -190,7 +190,7 @@ class TestMultiTFConfirmation:
     def test_disagreement_reduces_confidence(self):
         r, c = confirm_regime_multitf(TRENDING_BULL, 0.8, RANGING, 0.6)
         assert r == TRENDING_BULL
-        assert c == pytest.approx(0.4)  # 0.8 * 0.50
+        assert c == pytest.approx(0.64)  # 0.8 * 0.80
 
     def test_1h_volatile_overrides(self):
         """1H VOLATILE overrides regardless of 15m."""

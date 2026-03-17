@@ -138,5 +138,5 @@ MAX_BALANCE_FRACTION = 0.33        # max 33% of balance per trade
 # ═══════════════════════════════════════════════════════════════════════════
 
 REGIME_TRANSITION_CONFIDENCE = 0.0  # TRANSITION regime = no trades (spec)
-REGIME_MTF_PENALTY = 0.50          # 50% penalty when 1H disagrees (spec)
+REGIME_MTF_PENALTY = 0.80          # 20% penalty when 1H disagrees (spec says ~40% of signals killed)
 CONFIRM_MIN_CONFIDENCE = 0.6       # minimum confidence to allow any trade (spec)
