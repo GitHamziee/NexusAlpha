@@ -93,7 +93,7 @@ MR_RSI_OVERBOUGHT = 62            # RSI overbought for short entry
 MR_VOLUME_MULT = 0.9              # volume multiplier for entry
 
 # Exit thresholds
-MR_STOP_ATR_MULT = 1.5            # ATR multiplier for stop loss
+MR_STOP_ATR_MULT = 2.5            # ATR multiplier for stop loss
 MR_TIME_STOP_CANDLES = 12         # 3 hours on 15m
 
 # ═══════════════════════════════════════════════════════════════════════════

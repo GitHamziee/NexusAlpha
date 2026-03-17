@@ -336,7 +336,9 @@ class NexusAlpha(IStrategy):
         if "mean_reversion" in tag and trade_candles > MR_TIME_STOP and current_profit < 0.005:
             return -0.001
 
-        return max(stop_pct, -0.05)  # never wider than 5%
+        # Clamp: never tighter than -1.5% (avoids same-candle stop-outs on 15m)
+        # and never wider than -5%
+        return max(min(stop_pct, -0.015), -0.05)
 
     # ─── confirm_trade_entry ───────────────────────────────────────────
 
@@ -394,7 +396,8 @@ class NexusAlpha(IStrategy):
         **kwargs,
     ) -> None:
         """Attach entry-time market context to the Trade for later logging."""
-        if order.get("ft_order_side") == "buy" or order.get("side") == "buy":
+        order_side = getattr(order, "ft_order_side", None) or getattr(order, "side", None)
+        if order_side == "buy":
             ctx = getattr(self, "_pending_entry_context", {})
             if ctx:
                 trade._regime_at_entry = ctx.get("regime")
