@@ -199,7 +199,7 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
     score_d = (ema50_slope > TF_EMA50_MIN_SLOPE * 2).astype(int)       # slope > 0.2%
 
     confluence_long = score_a + score_b + score_c + score_d
-    has_confluence_long = confluence_long >= 1
+    has_confluence_long = confluence_long >= 2
 
     long_cond = hard_gate_long & has_pullback_long & has_confluence_long
 
@@ -233,7 +233,7 @@ def populate_trend_entries(df: pd.DataFrame, pair: str = "BTC/USDT:USDT") -> pd.
     score_cs = (df["close"] < df["ema_200"]).astype(int)                # below major trend
     score_ds = (ema50_slope < -TF_EMA50_MIN_SLOPE * 2).astype(int)     # downtrend established
     confluence_short = score_a + score_b + score_cs + score_ds
-    has_confluence_short = confluence_short >= 1
+    has_confluence_short = confluence_short >= 2
 
     short_cond = hard_gate_short & has_pullback_short & has_confluence_short
 
@@ -252,7 +252,8 @@ def populate_trend_exits(df: pd.DataFrame) -> pd.DataFrame:
     """Add trend following exit signals.
 
     Adds columns: tf_exit_long, tf_exit_short.
-    Exit triggers: ADX death (< 18), Supertrend flip.
+    Exit triggers: Supertrend flip only.
+    ADX death DISABLED (5-9% win rate across all versions — actively harmful).
     ATR-based stop/TP are handled in custom_stoploss and confirm_trade_exit.
     """
     if df.empty:
@@ -260,13 +261,10 @@ def populate_trend_exits(df: pd.DataFrame) -> pd.DataFrame:
         df["tf_exit_short"] = pd.Series(dtype=int)
         return df
 
-    # ADX death exit: trend is dying
-    adx_death = df["tf_adx"] < ADX_DEATH_LEVEL
-
     # Supertrend flip exits
     st_flip_bear = (df["supertrend_direction"] == -1) & (df["supertrend_direction"].shift(1) == 1)
     st_flip_bull = (df["supertrend_direction"] == 1) & (df["supertrend_direction"].shift(1) == -1)
 
-    df["tf_exit_long"] = (adx_death | st_flip_bear).astype(int).fillna(0).astype(int)
-    df["tf_exit_short"] = (adx_death | st_flip_bull).astype(int).fillna(0).astype(int)
+    df["tf_exit_long"] = st_flip_bear.astype(int).fillna(0).astype(int)
+    df["tf_exit_short"] = st_flip_bull.astype(int).fillna(0).astype(int)
     return df

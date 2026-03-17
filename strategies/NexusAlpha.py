@@ -224,11 +224,13 @@ class NexusAlpha(IStrategy):
 
         # Trend Following
         long_tf = dataframe["tf_enter_long"] == 1
-        short_tf = dataframe["tf_enter_short"] == 1
         dataframe.loc[long_tf, "enter_long"] = 1
         dataframe.loc[long_tf, "enter_tag"] = "trend_following_long"
-        dataframe.loc[short_tf, "enter_short"] = 1
-        dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "enter_tag"] = "trend_following_short"
+
+        # TF Shorts — DISABLED (32% win rate across v3/v5, consistently unprofitable)
+        # short_tf = dataframe["tf_enter_short"] == 1
+        # dataframe.loc[short_tf, "enter_short"] = 1
+        # dataframe.loc[short_tf & (dataframe["enter_tag"] == ""), "enter_tag"] = "trend_following_short"
 
         # Mean Reversion — DISABLED (12% win rate destroys edge)
         # MR indicators still computed for regime detection, just no entries.
@@ -265,9 +267,9 @@ class NexusAlpha(IStrategy):
 
         # Trend following exits
         dataframe.loc[dataframe["tf_exit_long"] == 1, "exit_long"] = 1
-        dataframe.loc[dataframe["tf_exit_long"] == 1, "exit_tag"] = "tf_adx_death_or_st_flip"
+        dataframe.loc[dataframe["tf_exit_long"] == 1, "exit_tag"] = "tf_st_flip"
         dataframe.loc[dataframe["tf_exit_short"] == 1, "exit_short"] = 1
-        dataframe.loc[dataframe["tf_exit_short"] == 1, "exit_tag"] = "tf_adx_death_or_st_flip"
+        dataframe.loc[dataframe["tf_exit_short"] == 1, "exit_tag"] = "tf_st_flip"
 
         # Mean reversion exits
         mr_exit_l = (dataframe["mr_exit_long"] == 1) & (dataframe["exit_long"] == 0)
@@ -364,12 +366,24 @@ class NexusAlpha(IStrategy):
 
         # ── Fixed ATR-based stop from entry ────────────────────────────
         stop_distance = base_mult * entry_atr
-        stop_pct = -(stop_distance / entry_rate)
+        initial_stop_pct = -(stop_distance / entry_rate)
 
         # Clamp between min and max (never too tight, never too wide)
         min_stop = cfg.get("min_stoploss_pct", -0.015)
-        stop_pct = min(stop_pct, min_stop)           # enforce minimum width
-        return max(stop_pct, cfg["max_stoploss_pct"])  # enforce maximum width
+        initial_stop_pct = min(initial_stop_pct, min_stop)   # enforce minimum width
+        initial_stop_pct = max(initial_stop_pct, cfg["max_stoploss_pct"])  # enforce max width
+
+        # Convert to absolute stop price (FIXED from entry, no trailing)
+        if trade.is_short:
+            stop_price = entry_rate * (1 - initial_stop_pct)  # above entry
+        else:
+            stop_price = entry_rate * (1 + initial_stop_pct)  # below entry
+
+        # Return relative to current_rate so Freqtrade maps to same absolute price
+        if trade.is_short:
+            return 1 - (stop_price / current_rate)
+        else:
+            return (stop_price / current_rate) - 1
 
     def _get_entry_atr(self, dataframe: pd.DataFrame, trade: Trade) -> float:
         """Look up ATR at the candle when the trade was opened."""

@@ -1,6 +1,6 @@
 """Tests for trend following strategy — pullback + trend quality filters.
 
-Architecture: 3 hard gates + 1-of-3 pullback + 1-of-4 confluence.
+Architecture: 3 hard gates + 1-of-3 pullback + 2-of-4 confluence.
 """
 
 import numpy as np
@@ -120,24 +120,23 @@ class TestPopulateTrendEntries:
         assert df.loc[5, "tf_signal_tag"] == "trend_following"
 
     def test_min_confluence_long(self):
-        """All gates + pullback + exactly 1/4 confluence = signal fires."""
+        """All gates + pullback + exactly 2/4 confluence = signal fires."""
         df = _golden_path_long()
-        # Disable confluence A (ADX flat), B (low vol), D (slope weak)
-        df["tf_adx"] = [25, 25, 25, 25, 25, 25]  # flat, not rising
+        # Disable confluence B (low vol), D (slope weak)
         df["volume"] = [100] * 6
         df["ema_50_slope"] = [0.0015] * 6   # above 0.001 gate but below 0.002 scoring
-        # Only confluence C (close > EMA200) = 1 ✓
+        # Confluence A (ADX rising) ✓ + C (close > EMA200) ✓ = 2/4
         df = populate_trend_entries(df)
         assert df.loc[5, "tf_enter_long"] == 1
 
     def test_insufficient_confluence_blocks(self):
-        """All gates + pullback but 0/4 confluence = NO signal."""
+        """All gates + pullback but only 1/4 confluence = NO signal."""
         df = _golden_path_long()
-        # Disable all 4: A (ADX flat), B (low vol), C (below EMA200), D (slope weak)
+        # Disable A (ADX flat), B (low vol), D (slope weak) → only C remains (1/4)
         df["tf_adx"] = [25, 25, 25, 25, 25, 25]  # flat, not rising
         df["volume"] = [100] * 6
-        df["ema_200"] = [55000] * 6
         df["ema_50_slope"] = [0.0015] * 6   # below 0.002 → score D = 0
+        # Only confluence C (close > EMA200) = 1/4 < 2 → blocked
         df = populate_trend_entries(df)
         assert df.loc[5, "tf_enter_long"] == 0
 
@@ -260,17 +259,6 @@ class TestPopulateTrendEntries:
 
 
 class TestPopulateTrendExits:
-    def test_adx_death_triggers_exit(self):
-        """ADX dropping below 12 should trigger exit (only truly dead trends)."""
-        df = pd.DataFrame({
-            "tf_adx": [30, 25, 20, 15, 10],
-            "supertrend_direction": [1, 1, 1, 1, 1],
-        })
-        df = populate_trend_exits(df)
-        assert df.loc[4, "tf_exit_long"] == 1   # ADX=10 < 12
-        assert df.loc[3, "tf_exit_long"] == 0   # ADX=15 >= 12, no exit
-        assert df.loc[0, "tf_exit_long"] == 0
-
     def test_supertrend_flip_triggers_exit(self):
         """Supertrend flipping from bull to bear should exit long."""
         df = pd.DataFrame({
@@ -280,6 +268,26 @@ class TestPopulateTrendExits:
         df = populate_trend_exits(df)
         assert df.loc[3, "tf_exit_long"] == 1
         assert df.loc[2, "tf_exit_long"] == 0
+
+    def test_no_exit_when_adx_low_but_supertrend_holds(self):
+        """ADX death alone should NOT trigger exit (disabled in v6)."""
+        df = pd.DataFrame({
+            "tf_adx": [30, 25, 20, 15, 10],
+            "supertrend_direction": [1, 1, 1, 1, 1],
+        })
+        df = populate_trend_exits(df)
+        # No exits — ADX death disabled, Supertrend still bullish
+        assert df["tf_exit_long"].sum() == 0
+
+    def test_supertrend_flip_short_exit(self):
+        """Supertrend flipping from bear to bull should exit short."""
+        df = pd.DataFrame({
+            "tf_adx": [30, 30, 30, 30, 30],
+            "supertrend_direction": [-1, -1, -1, 1, 1],
+        })
+        df = populate_trend_exits(df)
+        assert df.loc[3, "tf_exit_short"] == 1
+        assert df.loc[2, "tf_exit_short"] == 0
 
     def test_empty_dataframe(self):
         df = pd.DataFrame()
